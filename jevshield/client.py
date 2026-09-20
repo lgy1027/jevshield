@@ -10,7 +10,7 @@ try:
     from importlib.metadata import version as _pkg_version
     _USER_AGENT = f"jevshield/{_pkg_version('jevshield')}"
 except Exception:
-    _USER_AGENT = "jevshield/0.1.0"
+    _USER_AGENT = "jevshield/0.1.1"
 
 # 429/529 的退避窗口：牺牲至多 0.25s，仍在 2s timeout 预算内
 _RETRY_STATUSES = (429, 529)

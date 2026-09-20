@@ -1,6 +1,6 @@
 # JevShield 🛡️
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.0-blue.svg)](https://pypi.org/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.1-blue.svg)](https://pypi.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
