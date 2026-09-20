@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:   # 允许在 Actions 页面手动触发（如补发已存在的 tag）
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi   # 必须与 PyPI 后台 Pending Publisher 配置的环境名一致
+    permissions:
+      id-token: write   # Trusted Publishing（OIDC），无需存储任何 token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build distribution packages
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
