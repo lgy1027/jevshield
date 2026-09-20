@@ -1,5 +1,5 @@
 class JevGuardError(Exception):
-    """Base exception for all Jev-Guard runtime exceptions."""
+    """Base exception for all JevShield runtime exceptions."""
     pass
 
 

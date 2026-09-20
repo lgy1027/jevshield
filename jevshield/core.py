@@ -75,7 +75,7 @@ def enforce_policy(
     if is_blocked:
         fallback_hint = f" [Engine: {meta['reason']}]" if "fallback" in meta else " [Engine: Jev System-1]"
         print("\n" + "!" * 64)
-        print(f"🚨 [Jev-Guard Policy Violation]{fallback_hint}")
+        print(f"🚨 [JevShield Policy Violation]{fallback_hint}")
         print(f"• Tool Target    : {tool_name}")
         print(f"• Assessed Risk  : {risk_choice.upper()} (Confidence: {risk_conf:.1%})")
         print(f"• Destructive    : {'YES' if is_destructive else 'NO'} (P_irreversible: {p_destructive:.1%})")
@@ -83,7 +83,7 @@ def enforce_policy(
         print(f"• Invoc Arguments: args={args}, kwargs={kwargs}")
         print("!" * 64)
     else:
-        print(f"⚠️ [Jev-Guard] Low model confidence ({risk_conf:.1%} < {min_confidence:.1%}); "
+        print(f"⚠️ [JevShield] Low model confidence ({risk_conf:.1%} < {min_confidence:.1%}); "
               f"escalating '{tool_name}' to operator confirmation.")
 
     # Headless / Docker CI Check
@@ -93,7 +93,7 @@ def enforce_policy(
         try:
             choice = input("👉 Authorize this execution? (Enter 'y' to approve, any other key to abort): ").strip().lower()
             if choice == "y":
-                print("[Jev-Guard] Authorized manually by operator.\n")
+                print("[JevShield] Authorized manually by operator.\n")
                 return
             raise SecurityViolationError(
                 tool_name=tool_name,
