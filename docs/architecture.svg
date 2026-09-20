@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16A34A"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#DC2626"/>
+    </marker>
+  </defs>
+
+  <!-- User Instruction -->
+  <rect x="330" y="24" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="500" y="52" text-anchor="middle" font-size="19" font-weight="700" fill="#0F172A">User Instruction</text>
+  <text x="500" y="74" text-anchor="middle" font-size="14" fill="#64748B">High-level task or prompt input</text>
+
+  <line x1="500" y1="88" x2="500" y2="118" stroke="#64748B" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- System 2 -->
+  <rect x="160" y="120" width="680" height="130" rx="14" fill="#F0F7FF" stroke="#BFDBFE" stroke-width="2"/>
+  <rect x="184" y="140" width="96" height="28" rx="7" fill="#2563EB"/>
+  <text x="232" y="159" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF">SYSTEM 2</text>
+  <text x="292" y="160" font-size="19" font-weight="700" fill="#0F172A">Deep Planning &amp; Reasoning Agent</text>
+  <text x="184" y="198" font-size="14" fill="#334155">• Models: Claude, GPT, Hermes, DeepSeek-R1</text>
+  <text x="184" y="224" font-size="14" fill="#334155">• Generates long-range plans, code, and structured tool invocations</text>
+
+  <line x1="500" y1="250" x2="500" y2="290" stroke="#64748B" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="512" y="276" font-size="13" font-weight="600" fill="#64748B">Tool Call Request</text>
+
+  <!-- System 1 -->
+  <rect x="60" y="296" width="880" height="250" rx="14" fill="#FAF5FF" stroke="#E9D5FF" stroke-width="2"/>
+  <rect x="84" y="316" width="96" height="28" rx="7" fill="#7C3AED"/>
+  <text x="132" y="335" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF">SYSTEM 1</text>
+  <text x="192" y="336" font-size="19" font-weight="700" fill="#0F172A">JevShield Runtime Middleware</text>
+  <text x="84" y="368" font-size="14" fill="#334155">Sub-100ms, non-autoregressive logits readout via TypeSafe Jev (Output cost: $0.00)</text>
+
+  <rect x="84" y="384" width="400" height="140" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <text x="104" y="416" font-size="16" font-weight="700" fill="#0F172A">Logits Evaluation Primitives</text>
+  <text x="104" y="450" font-size="14" fill="#334155">• Choice: Nominal risk tier assignment</text>
+  <text x="104" y="476" font-size="14" fill="#334155">• Noul / Boolean: P(destructive statement)</text>
+  <text x="104" y="502" font-size="14" fill="#334155">• Score: failure blast radius (0–4)</text>
+
+  <rect x="516" y="384" width="400" height="140" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <text x="536" y="416" font-size="16" font-weight="700" fill="#0F172A">Policy Enforcement</text>
+  <text x="536" y="450" font-size="14" fill="#334155">• Severity × Irreversibility 2D decision matrix</text>
+  <text x="536" y="476" font-size="14" fill="#334155">• Zero-config local heuristic fallback (offline safe)</text>
+  <text x="536" y="502" font-size="14" fill="#334155">• Calibrated-confidence routing to operator</text>
+
+  <line x1="284" y1="546" x2="284" y2="586" stroke="#16A34A" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <line x1="716" y1="546" x2="716" y2="586" stroke="#DC2626" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- PASSED -->
+  <rect x="40" y="590" width="440" height="112" rx="10" fill="#F0FDF4" stroke="#BBF7D0" stroke-width="2"/>
+  <rect x="64" y="610" width="92" height="26" rx="7" fill="#16A34A"/>
+  <text x="110" y="628" text-anchor="middle" font-size="13" font-weight="700" fill="#FFFFFF">PASSED</text>
+  <text x="168" y="629" font-size="17" font-weight="700" fill="#0F172A">Safe / Verified Execution</text>
+  <text x="64" y="662" font-size="14" fill="#334155">• Immediate low-latency pass-through to environment</text>
+  <text x="64" y="686" font-size="14" fill="#334155">• Read-only operations, state updates, safe API calls</text>
+
+  <!-- BLOCKED -->
+  <rect x="520" y="590" width="440" height="112" rx="10" fill="#FEF2F2" stroke="#FECACA" stroke-width="2"/>
+  <rect x="544" y="610" width="92" height="26" rx="7" fill="#DC2626"/>
+  <text x="590" y="628" text-anchor="middle" font-size="13" font-weight="700" fill="#FFFFFF">BLOCKED</text>
+  <text x="648" y="629" font-size="17" font-weight="700" fill="#0F172A">Policy Violation Halt</text>
+  <text x="544" y="662" font-size="14" fill="#334155">• Blocks destructive calls (e.g. rm -rf, DROP TABLE)</text>
+  <text x="544" y="686" font-size="14" fill="#334155">• Interactive terminal confirmation (y/n) or raises error</text>
+</svg>

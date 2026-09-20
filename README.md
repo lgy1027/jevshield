@@ -18,22 +18,9 @@ Traditional LLM guardrails rely on slow, autoregressive generation: calling GPT-
 
 ## Architecture: System-1 vs. System-2 Division
 
-```text
-User Instruction -> Agent (Claude / GPT / Hermes [System 2: Deep Planning])
-|
-▼ (Prepares Tool Call)
-┌─────────────────────────────┐
-│   @guard Middleware (Jev)   │ ◄── Sub-100ms Logits Readout
-│  [System 1: Rapid Reflex]   │     Output Cost: $0.00
-└──────────────┬──────────────┘
-|
-┌─────────────┴─────────────┐
-▼                           ▼
-[Safe / Verified]           [Destructive Action]
-|                           |
-Execute Tool Action         Trigger Operator Prompt
-or Throw SecurityViolationError
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lgy1027/jevshield/main/docs/architecture.svg" alt="JevShield architecture: the System 2 agent prepares a tool call; the System 1 JevShield middleware evaluates it in sub-100ms via Choice/Noul/Score primitives and either passes safe calls or halts destructive ones.">
+</p>
 
 ---
 
