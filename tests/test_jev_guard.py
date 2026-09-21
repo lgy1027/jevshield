@@ -595,6 +595,62 @@ class TestRetryAndFallback(unittest.TestCase):
         client._http_client.post.side_effect = responses
         return client
 
+    def _async_client_with_post(self, responses):
+        client = make_client()
+        client.is_mock_mode = False
+        client.api_key = "test-key"
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(side_effect=responses)
+        return client
+
+    def _partial_gateway_answers(self):
+        return {
+            "risk_level": {
+                "type": "choice",
+                "choice": "safe",
+                "confidence": 0.91,
+                "probabilities": {"safe": 0.91, "medium_risk": 0.08},
+            },
+            "blast_radius": {
+                "type": "score",
+                "score": 0.0,
+                "confidence": 0.73,
+            },
+            "_gateway": {"provider": "typesafe", "request_id": "req-42"},
+        }
+
+    def test_legacy_evaluate_returns_partial_gateway_answers_unchanged(self):
+        answers = self._partial_gateway_answers()
+        client = self._client_with_post([FakeResponse(200, {"answers": answers})])
+        self.assertEqual(client.evaluate("t", "doc", "args"), answers)
+
+    def test_legacy_aevaluate_returns_partial_gateway_answers_unchanged(self):
+        answers = self._partial_gateway_answers()
+        client = self._async_client_with_post([
+            FakeResponse(200, {"answers": answers})
+        ])
+        self.assertEqual(
+            asyncio.run(client.aevaluate("t", "doc", "args")), answers
+        )
+
+    def test_strict_context_rejects_partial_gateway_answers(self):
+        answers = self._partial_gateway_answers()
+        client = self._client_with_post([FakeResponse(200, {"answers": answers})])
+        with self.assertRaises(MalformedEvaluationError):
+            client.evaluate_context(
+                GuardContext("t", "doc", {}), ProductionPolicy()
+            )
+
+    def test_strict_async_context_rejects_partial_gateway_answers(self):
+        answers = self._partial_gateway_answers()
+        client = self._async_client_with_post([
+            FakeResponse(200, {"answers": answers})
+        ])
+        with self.assertRaises(MalformedEvaluationError):
+            asyncio.run(client.aevaluate_context(
+                GuardContext("t", "doc", {}), ProductionPolicy()
+            ))
+
     def test_429_then_success_retries(self):
         client = self._client_with_post([
             FakeResponse(429),
@@ -640,18 +696,28 @@ class TestRetryAndFallback(unittest.TestCase):
         with mock.patch("jevshield.client.time.sleep"):
             out = client.evaluate("run_cmd", "doc", "rm -rf /")
         self.assertTrue(out["_meta"]["fallback"])
+        self.assertEqual(out["_meta"]["reason"], "Gateway Non-200 Fallback")
         self.assertEqual(client._http_client.post.call_count, 2)
 
     def test_non_200_no_retry(self):
         client = self._client_with_post([FakeResponse(500)])
         out = client.evaluate("t", "doc", "args")
         self.assertTrue(out["_meta"]["fallback"])
+        self.assertEqual(out["_meta"]["reason"], "Gateway Non-200 Fallback")
         self.assertEqual(client._http_client.post.call_count, 1)
 
     def test_empty_answers_falls_back(self):
         client = self._client_with_post([FakeResponse(200, {"answers": {}})])
         out = client.evaluate("t", "doc", "args")
         self.assertTrue(out["_meta"]["fallback"])
+        self.assertEqual(out["_meta"]["reason"], "Empty Answers Fallback")
+
+    def test_legacy_async_exception_preserves_fallback_reason(self):
+        client = self._async_client_with_post([httpx.ConnectError("offline")])
+        out = asyncio.run(client.aevaluate("t", "doc", "args"))
+        self.assertEqual(
+            out["_meta"]["reason"], "Gateway Async Fallback (ConnectError)"
+        )
 
     def test_context_evaluation_returns_typed_evaluation(self):
         client = self._client_with_post([

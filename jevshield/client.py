@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import httpx
 
 from .exceptions import EvaluatorError, EvaluatorTimeout, MalformedEvaluationError
-from .models import DevelopmentPolicy, Evaluation, FailureMode, GuardContext, Policy
+from .models import Evaluation, FailureMode, GuardContext, Policy
 from .redaction import build_evaluation_state
 
 try:
@@ -186,13 +186,56 @@ class JevClient:
             "User-Agent": _USER_AGENT
         }
 
-    def evaluate(self, tool_name: str, docstring: str, args_repr: str) -> Dict[str, Any]:
-        """Compatibility wrapper for the legacy string-based evaluation API."""
-        evaluation = self.evaluate_context(
-            GuardContext(tool_name, docstring, {"args_repr": args_repr}),
-            DevelopmentPolicy(),
+    def _post_payload(self, payload: Dict[str, Any]):
+        resp = self._http_client.post(
+            self.base_url, headers=self._headers(), json=payload
         )
-        return self._evaluation_to_answers(evaluation)
+        if resp.status_code in _RETRY_STATUSES:
+            time.sleep(_retry_after_seconds(resp))
+            resp = self._http_client.post(
+                self.base_url, headers=self._headers(), json=payload
+            )
+        return resp
+
+    async def _apost_payload(self, payload: Dict[str, Any]):
+        client = self._get_async_client()
+        resp = await client.post(
+            self.base_url, headers=self._headers(), json=payload
+        )
+        if resp.status_code in _RETRY_STATUSES:
+            await asyncio.sleep(_retry_after_seconds(resp))
+            resp = await client.post(
+                self.base_url, headers=self._headers(), json=payload
+            )
+        return resp
+
+    def evaluate(self, tool_name: str, docstring: str, args_repr: str) -> Dict[str, Any]:
+        """Return the legacy raw answer mapping without strict normalization."""
+        context = GuardContext(tool_name, docstring, {"args_repr": args_repr})
+        if self.is_mock_mode:
+            return self._legacy_fallback(
+                tool_name, args_repr, "Local Mock Mode (No API Key)"
+            )
+
+        payload = self._build_payload(build_evaluation_state(context))
+        try:
+            resp = self._post_payload(payload)
+            if resp.status_code == 200:
+                answers = self._extract_answers(resp.json())
+                if answers:
+                    return answers
+                return self._legacy_fallback(
+                    tool_name, args_repr, "Empty Answers Fallback"
+                )
+        except Exception as error:
+            return self._legacy_fallback(
+                tool_name,
+                args_repr,
+                f"Gateway Fallback ({type(error).__name__})",
+            )
+        return self._legacy_fallback(
+            tool_name, args_repr, "Gateway Non-200 Fallback"
+        )
 
     def evaluate_context(
         self, context: GuardContext, policy: Policy
@@ -212,11 +255,7 @@ class JevClient:
         payload = self._build_payload(state)
         started = time.perf_counter()
         try:
-            resp = self._http_client.post(self.base_url, headers=self._headers(), json=payload)
-            # 限流/过载按官方建议退避重试一次（遵循 retry-after 头），避免直接静默降级到启发式
-            if resp.status_code in _RETRY_STATUSES:
-                time.sleep(_retry_after_seconds(resp))
-                resp = self._http_client.post(self.base_url, headers=self._headers(), json=payload)
+            resp = self._post_payload(payload)
         except (httpx.TimeoutException, TimeoutError) as error:
             return self._resolve_failure(
                 context, policy, EvaluatorTimeout(type(error).__name__)
@@ -249,12 +288,32 @@ class JevClient:
         return evaluation
 
     async def aevaluate(self, tool_name: str, docstring: str, args_repr: str) -> Dict[str, Any]:
-        """Compatibility wrapper for the legacy async string-based evaluation API."""
-        evaluation = await self.aevaluate_context(
-            GuardContext(tool_name, docstring, {"args_repr": args_repr}),
-            DevelopmentPolicy(),
+        """Return the legacy raw answer mapping without strict normalization."""
+        context = GuardContext(tool_name, docstring, {"args_repr": args_repr})
+        if self.is_mock_mode:
+            return self._legacy_fallback(
+                tool_name, args_repr, "Local Mock Mode (No API Key)"
+            )
+
+        payload = self._build_payload(build_evaluation_state(context))
+        try:
+            resp = await self._apost_payload(payload)
+            if resp.status_code == 200:
+                answers = self._extract_answers(resp.json())
+                if answers:
+                    return answers
+                return self._legacy_fallback(
+                    tool_name, args_repr, "Empty Answers Fallback"
+                )
+        except Exception as error:
+            return self._legacy_fallback(
+                tool_name,
+                args_repr,
+                f"Gateway Async Fallback ({type(error).__name__})",
+            )
+        return self._legacy_fallback(
+            tool_name, args_repr, "Gateway Non-200 Fallback"
         )
-        return self._evaluation_to_answers(evaluation)
 
     async def aevaluate_context(
         self, context: GuardContext, policy: Policy
@@ -272,13 +331,9 @@ class JevClient:
             )
 
         payload = self._build_payload(state)
-        client = self._get_async_client()
         started = time.perf_counter()
         try:
-            resp = await client.post(self.base_url, headers=self._headers(), json=payload)
-            if resp.status_code in _RETRY_STATUSES:
-                await asyncio.sleep(_retry_after_seconds(resp))
-                resp = await client.post(self.base_url, headers=self._headers(), json=payload)
+            resp = await self._apost_payload(payload)
         except (httpx.TimeoutException, TimeoutError) as error:
             return self._resolve_failure(
                 context, policy, EvaluatorTimeout(type(error).__name__)
@@ -394,7 +449,9 @@ class JevClient:
         return number
 
     @staticmethod
-    def _evaluation_to_answers(evaluation: Evaluation) -> Dict[str, Any]:
+    def _evaluation_to_answers(
+        evaluation: Evaluation, fallback_reason: str = "Heuristic Fallback"
+    ) -> Dict[str, Any]:
         answers = {
             "risk_level": {
                 "type": "choice",
@@ -413,8 +470,16 @@ class JevClient:
             },
         }
         if evaluation.source == "heuristic":
-            answers["_meta"] = {"fallback": True, "reason": "Heuristic Fallback"}
+            answers["_meta"] = {"fallback": True, "reason": fallback_reason}
         return answers
+
+    def _legacy_fallback(
+        self, tool_name: str, args_repr: str, reason: str
+    ) -> Dict[str, Any]:
+        return self._evaluation_to_answers(
+            self._heuristic_fallback(tool_name, args_repr, reason),
+            fallback_reason=reason,
+        )
 
     def _heuristic_fallback(
         self, tool_name: str, args_repr: str, reason: str
