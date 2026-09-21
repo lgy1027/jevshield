@@ -1,6 +1,11 @@
+import asyncio
+import inspect
+import queue
 import sys
-from typing import Any, Dict, Optional, Tuple, Union
+import threading
+from typing import Any, Dict, Optional, Protocol, Tuple, Union
 
+from .audit import AuditEvent, AuditSink, NullAuditSink
 from .exceptions import (
     EvaluatorError,
     EvaluatorTimeout,
@@ -20,6 +25,39 @@ RISK_TIERS = {
 BLAST_MAX = 4.0
 # 「影响面达到次高档位及以上」的阻断线
 BLAST_BLOCK_THRESHOLD = 3.0
+MAX_ASK_TIMEOUT = 30.0
+
+
+class Confirmer(Protocol):
+    """Bounded synchronous confirmation contract."""
+
+    def confirm(self, decision: GuardDecision, timeout: float) -> bool:
+        """Return ``True`` only when the redacted decision is approved."""
+
+
+class AsyncConfirmer(Protocol):
+    """Bounded asynchronous confirmation contract."""
+
+    async def confirm(self, decision: GuardDecision, timeout: float) -> bool:
+        """Return ``True`` only when the redacted decision is approved."""
+
+
+class CLIConfirmer:
+    """Interactive terminal confirmer for the policy-based guard path."""
+
+    def confirm(self, decision: GuardDecision, timeout: float) -> bool:
+        del timeout
+        evaluation = decision.evaluation
+        print(
+            "[JevShield] Confirmation required for "
+            f"'{decision.context.tool_name}' "
+            f"(risk={evaluation.risk_level}, "
+            f"irreversibility={evaluation.irreversibility:.1%})."
+        )
+        choice = input(
+            "Authorize this execution? (Enter 'y' to approve, any other key to abort): "
+        )
+        return choice.strip().lower() == "y"
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -33,7 +71,7 @@ def _redacted_context(context: GuardContext) -> GuardContext:
     """Return the audit-safe context retained on a decision."""
 
     return GuardContext(
-        tool_name=context.tool_name,
+        tool_name=redact_for_audit(context.tool_name),
         tool_description=redact_for_audit(context.tool_description),
         args=redact_for_audit(context.args),
         environment=redact_for_audit(context.environment),
@@ -41,6 +79,81 @@ def _redacted_context(context: GuardContext) -> GuardContext:
         resource_scope=redact_for_audit(context.resource_scope),
         intent=redact_for_audit(context.intent),
     )
+
+
+def _redacted_decision(decision: GuardDecision) -> GuardDecision:
+    """Return a decision safe to pass to confirmers, audits, and exceptions."""
+
+    evaluation = decision.evaluation
+    safe_decision = GuardDecision(
+        action=decision.action,
+        context=_redacted_context(decision.context),
+        evaluation=Evaluation(
+            risk_level=redact_for_audit(evaluation.risk_level),
+            irreversibility=evaluation.irreversibility,
+            blast_radius=evaluation.blast_radius,
+            confidence=evaluation.confidence,
+            source=redact_for_audit(evaluation.source),
+            latency_ms=evaluation.latency_ms,
+        ),
+        policy_name=redact_for_audit(decision.policy_name),
+        network_called=decision.network_called,
+        redacted_arguments=redact_for_audit(decision.context.args),
+    )
+    return decision if safe_decision == decision else safe_decision
+
+
+def _bounded_ask_timeout(timeout: float) -> float:
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(MAX_ASK_TIMEOUT, max(0.0, value))
+
+
+def _audit(
+    audit_sink: Optional[AuditSink], outcome: str, decision: GuardDecision
+) -> None:
+    sink = audit_sink if audit_sink is not None else NullAuditSink()
+    sink.emit(AuditEvent.from_decision(decision, outcome))
+
+
+def _denial(
+    decision: GuardDecision, reason: str, audit_sink: Optional[AuditSink], outcome: str
+) -> SecurityViolationError:
+    _audit(audit_sink, outcome, decision)
+    evaluation = decision.evaluation
+    return SecurityViolationError(
+        tool_name=decision.context.tool_name,
+        risk_level=evaluation.risk_level,
+        reason=reason,
+        p_destructive=evaluation.irreversibility,
+        decision=decision,
+    )
+
+
+def _run_confirmer(
+    confirmer: Confirmer, decision: GuardDecision, timeout: float
+) -> Tuple[str, bool]:
+    """Run a synchronous confirmer without allowing it to block enforcement."""
+
+    if timeout <= 0.0:
+        return "timeout", False
+    result_queue = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            result = confirmer.confirm(decision, timeout)
+        except Exception:
+            result_queue.put(("error", False))
+        else:
+            result_queue.put(("result", result is True))
+
+    threading.Thread(target=invoke, daemon=True).start()
+    try:
+        return result_queue.get(timeout=timeout)
+    except queue.Empty:
+        return "timeout", False
 
 
 def _failure_evaluation(error: EvaluatorError) -> Evaluation:
@@ -108,13 +221,7 @@ def decide(
     )
 
 
-def enforce(decision: GuardDecision, confirmer=None) -> None:
-    """Enforce a completed decision; confirmation is implemented in Task 5."""
-
-    del confirmer
-    if decision.action != Action.DENY:
-        return
-
+def _deny_reason(decision: GuardDecision) -> str:
     reasons = {
         "local_rule": "Blocked by local rule.",
         "local_rule_error": "Blocked after local rule failure.",
@@ -122,14 +229,116 @@ def enforce(decision: GuardDecision, confirmer=None) -> None:
         "malformed_evaluation": "Blocked after malformed evaluator response.",
         "evaluator_error": "Blocked after evaluator failure.",
     }
-    evaluation = decision.evaluation
-    raise SecurityViolationError(
-        tool_name=decision.context.tool_name,
-        risk_level=evaluation.risk_level,
-        reason=reasons.get(evaluation.source, "Blocked automatically by policy."),
-        p_destructive=evaluation.irreversibility,
-        decision=decision,
+    return reasons.get(
+        decision.evaluation.source, "Blocked automatically by policy."
     )
+
+
+def enforce(
+    decision: GuardDecision,
+    confirmer: Optional[Confirmer] = None,
+    audit_sink: Optional[AuditSink] = None,
+    ask_timeout: float = MAX_ASK_TIMEOUT,
+) -> None:
+    """Enforce a decision with bounded confirmation and one terminal audit event."""
+
+    safe_decision = _redacted_decision(decision)
+    if safe_decision.action == Action.ALLOW:
+        _audit(audit_sink, "allow", safe_decision)
+        return
+    if safe_decision.action == Action.DENY:
+        raise _denial(
+            safe_decision,
+            _deny_reason(safe_decision),
+            audit_sink,
+            "deny",
+        )
+
+    active_confirmer = confirmer
+    if active_confirmer is None and sys.stdin.isatty():
+        active_confirmer = CLIConfirmer()
+    if active_confirmer is None:
+        raise _denial(
+            safe_decision,
+            "Confirmation required but no interactive terminal or confirmer is available.",
+            audit_sink,
+            "ask-rejection",
+        )
+
+    timeout = _bounded_ask_timeout(ask_timeout)
+    state, approved = _run_confirmer(active_confirmer, safe_decision, timeout)
+    if approved:
+        _audit(audit_sink, "ask-approval", safe_decision)
+        return
+    if state == "timeout":
+        reason = "Confirmation timed out."
+    elif state == "error":
+        reason = "Confirmation failed closed."
+    else:
+        reason = "Confirmation was not approved."
+    raise _denial(safe_decision, reason, audit_sink, "ask-rejection")
+
+
+async def aenforce(
+    decision: GuardDecision,
+    confirmer: Optional[Union[Confirmer, AsyncConfirmer]] = None,
+    audit_sink: Optional[AuditSink] = None,
+    ask_timeout: float = MAX_ASK_TIMEOUT,
+) -> None:
+    """Asynchronously enforce a decision with a bounded confirmer."""
+
+    safe_decision = _redacted_decision(decision)
+    if safe_decision.action == Action.ALLOW:
+        _audit(audit_sink, "allow", safe_decision)
+        return
+    if safe_decision.action == Action.DENY:
+        raise _denial(
+            safe_decision,
+            _deny_reason(safe_decision),
+            audit_sink,
+            "deny",
+        )
+
+    active_confirmer = confirmer
+    if active_confirmer is None and sys.stdin.isatty():
+        active_confirmer = CLIConfirmer()
+    if active_confirmer is None:
+        raise _denial(
+            safe_decision,
+            "Confirmation required but no interactive terminal or confirmer is available.",
+            audit_sink,
+            "ask-rejection",
+        )
+
+    timeout = _bounded_ask_timeout(ask_timeout)
+    state = "result"
+    approved = False
+    try:
+        if inspect.iscoroutinefunction(active_confirmer.confirm):
+            result = await asyncio.wait_for(
+                active_confirmer.confirm(safe_decision, timeout),
+                timeout=timeout,
+            )
+            approved = result is True
+        else:
+            state, approved = await asyncio.to_thread(
+                _run_confirmer, active_confirmer, safe_decision, timeout
+            )
+    except asyncio.TimeoutError:
+        state = "timeout"
+    except Exception:
+        state = "error"
+
+    if approved:
+        _audit(audit_sink, "ask-approval", safe_decision)
+        return
+    if state == "timeout":
+        reason = "Confirmation timed out."
+    elif state == "error":
+        reason = "Confirmation failed closed."
+    else:
+        reason = "Confirmation was not approved."
+    raise _denial(safe_decision, reason, audit_sink, "ask-rejection")
 
 
 def enforce_policy(

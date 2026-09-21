@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import time
 import unittest
 from dataclasses import replace
 from unittest import mock
@@ -9,7 +10,8 @@ from unittest import mock
 import httpx
 
 from jevshield.client import JevClient, DEFAULT_BACKEND
-from jevshield.core import BLAST_MAX, decide, enforce, enforce_policy
+from jevshield.audit import CallbackAuditSink
+from jevshield.core import BLAST_MAX, aenforce, decide, enforce, enforce_policy
 from jevshield.exceptions import (
     EvaluatorError,
     EvaluatorTimeout,
@@ -21,6 +23,7 @@ from jevshield import (
     DevelopmentPolicy,
     Evaluation,
     GuardContext,
+    GuardDecision,
     ProductionPolicy,
     guard,
 )
@@ -47,6 +50,17 @@ def safe_evaluation():
         irreversibility=0.01,
         blast_radius=0.0,
         confidence=0.9,
+        source="jev",
+    )
+
+
+def low_confidence_evaluation():
+    """Construct an evaluation that requires operator confirmation."""
+    return Evaluation(
+        risk_level="safe",
+        irreversibility=0.01,
+        blast_radius=0.0,
+        confidence=0.2,
         source="jev",
     )
 
@@ -192,6 +206,176 @@ class TestDeterministicDecisions(unittest.TestCase):
         with self.assertRaises(SecurityViolationError) as error:
             enforce(decision)
         self.assertIs(error.exception.decision, decision)
+
+
+class TestConfirmationAndAudit(unittest.TestCase):
+    def ask_decision(self, args=None):
+        return GuardDecision(
+            action=Action.ASK,
+            context=GuardContext("run", "", args or {}),
+            evaluation=low_confidence_evaluation(),
+            policy_name="production",
+        )
+
+    def deny_decision(self, args=None):
+        return GuardDecision(
+            action=Action.DENY,
+            context=GuardContext("run", "", args or {}),
+            evaluation=Evaluation(
+                risk_level="critical_danger",
+                irreversibility=0.99,
+                blast_radius=4.0,
+                confidence=1.0,
+                source="jev",
+            ),
+            policy_name="production",
+        )
+
+    def test_ask_without_tty_or_confirmer_denies_immediately(self):
+        decision = self.ask_decision()
+        with mock.patch("sys.stdin.isatty", return_value=False):
+            with self.assertRaises(SecurityViolationError):
+                enforce(decision)
+
+    def test_audit_sink_receives_one_redacted_event_on_deny(self):
+        secret = "sk-secret-value"
+        seen = []
+        sink = CallbackAuditSink(seen.append)
+        decision = self.deny_decision(args={"token": secret})
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            enforce(decision, audit_sink=sink)
+
+        self.assertEqual(len(seen), 1)
+        self.assertIsInstance(seen[0], GuardDecision)
+        self.assertEqual(seen[0].outcome, "deny")
+        self.assertNotIn(secret, str(seen[0]))
+        self.assertNotIn(secret, repr(raised.exception.decision))
+
+    def test_allow_emits_exactly_one_redacted_event(self):
+        secret = "sk-secret-value"
+        seen = []
+        sink = CallbackAuditSink(seen.append)
+        decision = replace(
+            self.deny_decision(args={"token": secret}),
+            action=Action.ALLOW,
+        )
+
+        enforce(decision, audit_sink=sink)
+
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].outcome, "allow")
+        self.assertNotIn(secret, str(seen[0]))
+
+    def test_falsey_audit_sink_still_receives_event(self):
+        class FalseySink:
+            def __init__(self):
+                self.seen = []
+
+            def __bool__(self):
+                return False
+
+            def emit(self, event):
+                self.seen.append(event)
+
+        sink = FalseySink()
+        decision = replace(self.deny_decision(), action=Action.ALLOW)
+
+        enforce(decision, audit_sink=sink)
+
+        self.assertEqual(len(sink.seen), 1)
+
+    def test_confirmer_receives_redacted_decision_and_bounded_timeout(self):
+        secret = "sk-secret-value"
+        seen = []
+
+        class Approver:
+            def confirm(self, decision, timeout):
+                seen.append((decision, timeout))
+                return True
+
+        audit_events = []
+        enforce(
+            self.ask_decision(args={"token": secret}),
+            confirmer=Approver(),
+            audit_sink=CallbackAuditSink(audit_events.append),
+            ask_timeout=0.25,
+        )
+
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][1], 0.25)
+        self.assertNotIn(secret, repr(seen[0][0]))
+        self.assertEqual([event.outcome for event in audit_events], ["ask-approval"])
+
+    def test_false_or_exception_from_confirmer_denies_once(self):
+        for confirmer in (
+            mock.Mock(confirm=mock.Mock(return_value=False)),
+            mock.Mock(confirm=mock.Mock(side_effect=RuntimeError("secret detail"))),
+        ):
+            with self.subTest(confirmer=confirmer):
+                seen = []
+                with self.assertRaises(SecurityViolationError) as raised:
+                    enforce(
+                        self.ask_decision(),
+                        confirmer=confirmer,
+                        audit_sink=CallbackAuditSink(seen.append),
+                    )
+                self.assertEqual([event.outcome for event in seen], ["ask-rejection"])
+                self.assertNotIn("secret detail", str(raised.exception))
+
+    def test_confirmer_timeout_denies_within_bound(self):
+        class SlowConfirmer:
+            def confirm(self, decision, timeout):
+                time.sleep(0.25)
+                return True
+
+        started = time.monotonic()
+        with self.assertRaises(SecurityViolationError):
+            enforce(
+                self.ask_decision(),
+                confirmer=SlowConfirmer(),
+                ask_timeout=0.01,
+            )
+        self.assertLess(time.monotonic() - started, 0.2)
+
+    def test_async_confirmer_approval_is_bounded_and_audited(self):
+        seen = []
+
+        class AsyncApprover:
+            async def confirm(self, decision, timeout):
+                self.timeout = timeout
+                return True
+
+        confirmer = AsyncApprover()
+        asyncio.run(aenforce(
+            self.ask_decision(),
+            confirmer=confirmer,
+            audit_sink=CallbackAuditSink(seen.append),
+            ask_timeout=0.25,
+        ))
+
+        self.assertEqual(confirmer.timeout, 0.25)
+        self.assertEqual([event.outcome for event in seen], ["ask-approval"])
+
+    def test_guard_forwards_policy_timeout_confirmer_and_audit_sink(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = low_confidence_evaluation()
+        policy = replace(ProductionPolicy(), min_confidence=0.8, ask_timeout=0.25)
+        confirmer = mock.Mock(confirm=mock.Mock(return_value=True))
+        seen = []
+
+        @guard(
+            policy=policy,
+            client=client,
+            confirmer=confirmer,
+            audit_sink=CallbackAuditSink(seen.append),
+        )
+        def list_files(path):
+            return path
+
+        self.assertEqual(list_files("/var/log"), "/var/log")
+        self.assertEqual(confirmer.confirm.call_args.args[1], 0.25)
+        self.assertEqual([event.outcome for event in seen], ["ask-approval"])
 
 
 class TestLocalRuleShortCircuit(unittest.TestCase):

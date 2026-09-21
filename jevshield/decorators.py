@@ -1,8 +1,9 @@
 import functools
 import inspect
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Union
+from .audit import AuditSink
 from .client import JevClient
-from .core import decide, enforce, enforce_policy
+from .core import AsyncConfirmer, Confirmer, aenforce, decide, enforce, enforce_policy
 from .exceptions import EvaluatorError, SecurityViolationError
 from .models import Evaluation, FailureMode, GuardContext, Policy
 from .rules import LocalRuleEngine, RuleOutcome, RuleResult
@@ -21,6 +22,8 @@ def guard(
     client: Optional[JevClient] = None,
     min_confidence: float = 0.0,
     policy: Optional[Policy] = None,
+    confirmer: Optional[Union[Confirmer, AsyncConfirmer]] = None,
+    audit_sink: Optional[AuditSink] = None,
 ):
     """
     为任何 Python 函数或 Agent 工具注入毫秒级 Jev 门禁。
@@ -53,7 +56,7 @@ def guard(
             )
             decision = decide(context, evaluation, policy)
             try:
-                enforce(decision)
+                enforce(decision, audit_sink=audit_sink)
             except SecurityViolationError as error:
                 error.rule_result = result
                 raise
@@ -75,7 +78,21 @@ def guard(
 
         def policy_decision(context: GuardContext, evaluation) -> None:
             decision = decide(context, evaluation, policy)
-            enforce(decision)
+            enforce(
+                decision,
+                confirmer=confirmer,
+                audit_sink=audit_sink,
+                ask_timeout=policy.ask_timeout,
+            )
+
+        async def async_policy_decision(context: GuardContext, evaluation) -> None:
+            decision = decide(context, evaluation, policy)
+            await aenforce(
+                decision,
+                confirmer=confirmer,
+                audit_sink=audit_sink,
+                ask_timeout=policy.ask_timeout,
+            )
 
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -93,7 +110,7 @@ def guard(
                         evaluation = await active_client.aevaluate_context(context, policy)
                     except EvaluatorError as error:
                         evaluation = error
-                    policy_decision(context, evaluation)
+                    await async_policy_decision(context, evaluation)
                     return await func(*args, **kwargs)
 
                 # 策略裁决
