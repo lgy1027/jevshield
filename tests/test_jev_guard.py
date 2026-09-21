@@ -1,4 +1,6 @@
 """jevshield 核心逻辑测试（stdlib unittest，零第三方依赖）。"""
+import asyncio
+import json
 import os
 import unittest
 from unittest import mock
@@ -229,6 +231,53 @@ class TestPayloadAndState(unittest.TestCase):
         state = client._http_client.post.call_args.kwargs["json"]["state"]
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz", state)
         self.assertIn("[REDACTED_SECRET]", state)
+
+    def test_evaluate_context_redacts_description_and_intent_before_payload(self):
+        client = self._network_client()
+        client._http_client.post.return_value = FakeResponse(
+            200, {"answers": {"risk_level": {"choice": "safe"}}}
+        )
+        client.evaluate_context(
+            GuardContext(
+                "run",
+                "Use sk-abcdefghijklmnopqrstuvwxyz123456 to authenticate",
+                {},
+                intent="Send sk-zyxwvutsrqponmlkjihgfedcba654321 to the operator",
+            ),
+            ProductionPolicy(),
+        )
+        state = client._http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz", state)
+        self.assertNotIn("zyxwvutsrqponmlkjihgfedcba", state)
+        self.assertEqual(state.count("[REDACTED_SECRET]"), 2)
+
+    def test_aevaluate_context_redacts_description_and_intent_before_payload(self):
+        client = make_client()
+        client.is_mock_mode = False
+        client.api_key = "test-key"
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(
+            200, {"answers": {"risk_level": {"choice": "safe"}}}
+        ))
+        asyncio.run(client.aevaluate_context(
+            GuardContext(
+                "run",
+                "Use sk-abcdefghijklmnopqrstuvwxyz123456 to authenticate",
+                {},
+                intent="Send sk-zyxwvutsrqponmlkjihgfedcba654321 to the operator",
+            ),
+            ProductionPolicy(),
+        ))
+        state = client._async_http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz", state)
+        self.assertNotIn("zyxwvutsrqponmlkjihgfedcba", state)
+        self.assertEqual(state.count("[REDACTED_SECRET]"), 2)
+
+    def test_prune_state_preserves_argument_limit(self):
+        client = make_client()
+        state = client._prune_state("run", "", "x" * 801, max_chars=800)
+        payload = json.loads(state.rsplit("\n", 1)[1])
+        self.assertEqual(len(payload["arguments"]["args_repr"]), 800)
 
 
 class FakeResponse:

@@ -121,9 +121,8 @@ class JevClient:
 
     def _prune_state(self, tool_name: str, docstring: str, args_repr: str, max_chars: int = 800) -> str:
         """Build canonical state for callers of the legacy private helper."""
-        del max_chars
         return build_evaluation_state(
-            GuardContext(tool_name, docstring, {"args_repr": args_repr})
+            GuardContext(tool_name, docstring, {"args_repr": args_repr[:max_chars]})
         )
 
     def _build_payload(self, state: str) -> Dict[str, Any]:

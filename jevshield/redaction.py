@@ -28,16 +28,13 @@ _EVALUATION_PREFIX = (
 )
 
 
-def _is_secret(field_name: Any, value: Any) -> bool:
-    return bool(
-        _SECRET_FIELD.search(str(field_name))
-        or isinstance(value, str) and _SECRET_VALUE.search(value)
-    )
-
-
 def _redact(value: Any, field_name: Any = "") -> Any:
-    if _is_secret(field_name, value):
+    if _SECRET_FIELD.search(str(field_name)):
         return "[REDACTED_SECRET]"
+    if isinstance(value, str):
+        if "PRIVATE KEY-----" in value:
+            return "[REDACTED_SECRET]"
+        return _SECRET_VALUE.sub("[REDACTED_SECRET]", value)
     if isinstance(value, Mapping):
         return {key: _redact(item, key) for key, item in value.items()}
     if isinstance(value, list):
@@ -83,9 +80,11 @@ def build_evaluation_state(context: GuardContext) -> str:
 
     payload = {
         "arguments": _bounded_arguments(context.args),
-        "intent": _bounded_text(context.intent, MAX_INTENT_CHARS),
+        "intent": _bounded_text(
+            redact_for_evaluation(context.intent), MAX_INTENT_CHARS
+        ),
         "tool_description": _bounded_text(
-            context.tool_description, MAX_DESCRIPTION_CHARS
+            redact_for_evaluation(context.tool_description), MAX_DESCRIPTION_CHARS
         ),
         "tool_name": _bounded_text(context.tool_name, MAX_TOOL_NAME_CHARS),
     }
