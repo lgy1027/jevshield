@@ -273,6 +273,47 @@ class TestPayloadAndState(unittest.TestCase):
         self.assertNotIn("zyxwvutsrqponmlkjihgfedcba", state)
         self.assertEqual(state.count("[REDACTED_SECRET]"), 2)
 
+    def test_evaluate_context_replaces_lowercase_pem_text_fields_before_payload(self):
+        client = self._network_client()
+        client._http_client.post.return_value = FakeResponse(
+            200, {"answers": {"risk_level": {"choice": "safe"}}}
+        )
+        client.evaluate_context(
+            GuardContext(
+                "run",
+                "-----BEGIN private key-----\nLEAKED_DESCRIPTION_KEY_BODY",
+                {},
+                intent="-----BEGIN private key-----\nLEAKED_INTENT_KEY_BODY",
+            ),
+            ProductionPolicy(),
+        )
+        state = client._http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn("LEAKED_DESCRIPTION_KEY_BODY", state)
+        self.assertNotIn("LEAKED_INTENT_KEY_BODY", state)
+        self.assertEqual(state.count("[REDACTED_SECRET]"), 2)
+
+    def test_aevaluate_context_replaces_lowercase_pem_text_fields_before_payload(self):
+        client = make_client()
+        client.is_mock_mode = False
+        client.api_key = "test-key"
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(
+            200, {"answers": {"risk_level": {"choice": "safe"}}}
+        ))
+        asyncio.run(client.aevaluate_context(
+            GuardContext(
+                "run",
+                "-----BEGIN private key-----\nLEAKED_DESCRIPTION_KEY_BODY",
+                {},
+                intent="-----BEGIN private key-----\nLEAKED_INTENT_KEY_BODY",
+            ),
+            ProductionPolicy(),
+        ))
+        state = client._async_http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn("LEAKED_DESCRIPTION_KEY_BODY", state)
+        self.assertNotIn("LEAKED_INTENT_KEY_BODY", state)
+        self.assertEqual(state.count("[REDACTED_SECRET]"), 2)
+
     def test_prune_state_preserves_argument_limit(self):
         client = make_client()
         state = client._prune_state("run", "", "x" * 801, max_chars=800)

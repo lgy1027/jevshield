@@ -12,6 +12,10 @@ _SECRET_FIELD = re.compile(
     r"private[_-]?key|access[_-]?key|client[_-]?secret)",
     re.IGNORECASE,
 )
+_PEM_PRIVATE_KEY = re.compile(
+    r"-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----",
+    re.IGNORECASE,
+)
 _SECRET_VALUE = re.compile(
     r"(?:\bsk-[A-Za-z0-9_-]{16,}\b|-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----)",
     re.IGNORECASE,
@@ -32,7 +36,7 @@ def _redact(value: Any, field_name: Any = "") -> Any:
     if _SECRET_FIELD.search(str(field_name)):
         return "[REDACTED_SECRET]"
     if isinstance(value, str):
-        if "PRIVATE KEY-----" in value:
+        if _PEM_PRIVATE_KEY.search(value):
             return "[REDACTED_SECRET]"
         return _SECRET_VALUE.sub("[REDACTED_SECRET]", value)
     if isinstance(value, Mapping):
