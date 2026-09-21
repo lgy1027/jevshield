@@ -40,6 +40,18 @@ def guard(
         def context_for(args: tuple, kwargs: Mapping[str, Any]) -> GuardContext:
             return GuardContext(tool_name, docstring, {"args": args, "kwargs": kwargs})
 
+        def redacted_context(context: GuardContext) -> GuardContext:
+            """Create the audit-safe context retained by an exposed decision."""
+            return GuardContext(
+                tool_name=context.tool_name,
+                tool_description=redact_for_audit(context.tool_description),
+                args=redact_for_audit(context.args),
+                environment=redact_for_audit(context.environment),
+                actor_id=redact_for_audit(context.actor_id),
+                resource_scope=redact_for_audit(context.resource_scope),
+                intent=redact_for_audit(context.intent),
+            )
+
         def raise_local_deny(context: GuardContext, result: RuleResult) -> None:
             evaluation = Evaluation(
                 risk_level="critical_danger",
@@ -50,7 +62,7 @@ def guard(
             )
             decision = GuardDecision(
                 action=Action.DENY,
-                context=context,
+                context=redacted_context(context),
                 evaluation=evaluation,
                 policy_name=policy.name if policy else "local_rule",
                 network_called=False,

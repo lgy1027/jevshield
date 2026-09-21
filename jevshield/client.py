@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import atexit
 import asyncio
@@ -6,7 +7,6 @@ from typing import Dict, Any, Optional
 import httpx
 
 from .models import GuardContext, Policy
-from .rules import DANGEROUS_STEMS as _DANGEROUS_STEMS, fast_deny_reason
 from .redaction import build_evaluation_state
 
 try:
@@ -59,8 +59,11 @@ DEFAULT_BACKEND = "typesafe"
 
 
 class JevClient:
-    # Compatibility alias; authoritative Fast-Deny rules live in rules.py.
-    DANGEROUS_STEMS = _DANGEROUS_STEMS
+    # 工具名中的高危词干（按 _ 与非单词字符切分），覆盖 delete_x / drop_x / wipe_x 等命名习惯
+    DANGEROUS_STEMS = {
+        "rm", "delete", "remove", "drop", "truncate", "wipe", "destroy",
+        "purge", "kill", "terminate", "format", "erase", "shutdown", "revoke",
+    }
 
     def __init__(
         self,
@@ -266,7 +269,15 @@ class JevClient:
     def _heuristic_fallback(self, tool_name: str, args_repr: str, reason: str) -> Dict[str, Any]:
         """本地启发式兜底：零依赖离线可用；返回与官方一致的 answers 结构。"""
         combined = f"{tool_name} {args_repr}".lower()
-        is_danger = bool(fast_deny_reason(tool_name, combined))
+        patterns = [
+            r"rm\s+-rf", r"drop\s+table", r"drop\s+database", r"format\s+[a-z]:",
+            r"truncate\s+table", r"kill\s+-9", r"chmod\s+777", r">\s*/dev/sd",
+            r"delete\s+from\s+[a-z_0-9]+", r"aws\s+s3\s+rb\s+--force"
+        ]
+        stems = {s for s in re.split(r"[_\W]+", tool_name.lower()) if s}
+        is_danger = bool(stems & self.DANGEROUS_STEMS) or any(
+            re.search(pat, combined) for pat in patterns
+        )
 
         return {
             "risk_level": {
