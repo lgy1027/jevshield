@@ -3,10 +3,12 @@ import re
 import time
 import atexit
 import asyncio
+import math
 from typing import Dict, Any, Optional
 import httpx
 
-from .models import GuardContext, Policy
+from .exceptions import EvaluatorError, EvaluatorTimeout, MalformedEvaluationError
+from .models import DevelopmentPolicy, Evaluation, FailureMode, GuardContext, Policy
 from .redaction import build_evaluation_state
 
 try:
@@ -186,88 +188,239 @@ class JevClient:
 
     def evaluate(self, tool_name: str, docstring: str, args_repr: str) -> Dict[str, Any]:
         """Compatibility wrapper for the legacy string-based evaluation API."""
-        return self.evaluate_context(
-            GuardContext(tool_name, docstring, {"args_repr": args_repr}), None
+        evaluation = self.evaluate_context(
+            GuardContext(tool_name, docstring, {"args_repr": args_repr}),
+            DevelopmentPolicy(),
         )
+        return self._evaluation_to_answers(evaluation)
 
     def evaluate_context(
-        self, context: GuardContext, policy: Optional[Policy]
-    ) -> Dict[str, Any]:
-        """Evaluate a structured context using redacted canonical state."""
-        del policy
+        self, context: GuardContext, policy: Policy
+    ) -> Evaluation:
+        """Evaluate a structured context or raise a typed evaluator failure."""
         state = build_evaluation_state(context)
         if self.is_mock_mode:
-            return self._heuristic_fallback(
-                context.tool_name, str(context.args), "Local Mock Mode (No API Key)"
+            return self._resolve_failure(
+                context,
+                policy,
+                EvaluatorError(
+                    "Evaluator unavailable because no API key is configured.",
+                    network_called=False,
+                ),
             )
 
         payload = self._build_payload(state)
+        started = time.perf_counter()
         try:
             resp = self._http_client.post(self.base_url, headers=self._headers(), json=payload)
             # 限流/过载按官方建议退避重试一次（遵循 retry-after 头），避免直接静默降级到启发式
             if resp.status_code in _RETRY_STATUSES:
                 time.sleep(_retry_after_seconds(resp))
                 resp = self._http_client.post(self.base_url, headers=self._headers(), json=payload)
-            if resp.status_code == 200:
-                answers = self._extract_answers(resp.json())
-                if answers:
-                    return answers
-                return self._heuristic_fallback(
-                    context.tool_name, str(context.args), "Empty Answers Fallback"
-                )
-        except Exception as e:
-            return self._heuristic_fallback(
-                context.tool_name, str(context.args),
-                f"Gateway Fallback ({type(e).__name__})"
+        except (httpx.TimeoutException, TimeoutError) as error:
+            return self._resolve_failure(
+                context, policy, EvaluatorTimeout(type(error).__name__)
+            )
+        except Exception as error:
+            return self._resolve_failure(
+                context, policy, EvaluatorError(type(error).__name__)
             )
 
-        return self._heuristic_fallback(
-            context.tool_name, str(context.args), "Gateway Non-200 Fallback"
-        )
+        if resp.status_code != 200:
+            return self._resolve_failure(
+                context,
+                policy,
+                EvaluatorError(f"Evaluator returned HTTP {resp.status_code}."),
+            )
+
+        try:
+            answers = self._extract_answers(resp.json())
+            evaluation = self._parse_evaluation(
+                answers, latency_ms=(time.perf_counter() - started) * 1000.0
+            )
+        except MalformedEvaluationError as error:
+            return self._resolve_failure(context, policy, error)
+        except Exception as error:
+            return self._resolve_failure(
+                context,
+                policy,
+                MalformedEvaluationError(type(error).__name__),
+            )
+        return evaluation
 
     async def aevaluate(self, tool_name: str, docstring: str, args_repr: str) -> Dict[str, Any]:
         """Compatibility wrapper for the legacy async string-based evaluation API."""
-        return await self.aevaluate_context(
-            GuardContext(tool_name, docstring, {"args_repr": args_repr}), None
+        evaluation = await self.aevaluate_context(
+            GuardContext(tool_name, docstring, {"args_repr": args_repr}),
+            DevelopmentPolicy(),
         )
+        return self._evaluation_to_answers(evaluation)
 
     async def aevaluate_context(
-        self, context: GuardContext, policy: Optional[Policy]
-    ) -> Dict[str, Any]:
-        """Asynchronously evaluate a structured context using canonical state."""
-        del policy
+        self, context: GuardContext, policy: Policy
+    ) -> Evaluation:
+        """Asynchronously evaluate a context or raise a typed failure."""
         state = build_evaluation_state(context)
         if self.is_mock_mode:
-            return self._heuristic_fallback(
-                context.tool_name, str(context.args), "Local Mock Mode (No API Key)"
+            return self._resolve_failure(
+                context,
+                policy,
+                EvaluatorError(
+                    "Evaluator unavailable because no API key is configured.",
+                    network_called=False,
+                ),
             )
 
         payload = self._build_payload(state)
         client = self._get_async_client()
+        started = time.perf_counter()
         try:
             resp = await client.post(self.base_url, headers=self._headers(), json=payload)
             if resp.status_code in _RETRY_STATUSES:
                 await asyncio.sleep(_retry_after_seconds(resp))
                 resp = await client.post(self.base_url, headers=self._headers(), json=payload)
-            if resp.status_code == 200:
-                answers = self._extract_answers(resp.json())
-                if answers:
-                    return answers
-                return self._heuristic_fallback(
-                    context.tool_name, str(context.args), "Empty Answers Fallback"
-                )
-        except Exception as e:
-            return self._heuristic_fallback(
-                context.tool_name, str(context.args),
-                f"Gateway Async Fallback ({type(e).__name__})"
+        except (httpx.TimeoutException, TimeoutError) as error:
+            return self._resolve_failure(
+                context, policy, EvaluatorTimeout(type(error).__name__)
+            )
+        except Exception as error:
+            return self._resolve_failure(
+                context, policy, EvaluatorError(type(error).__name__)
             )
 
-        return self._heuristic_fallback(
-            context.tool_name, str(context.args), "Gateway Non-200 Fallback"
+        if resp.status_code != 200:
+            return self._resolve_failure(
+                context,
+                policy,
+                EvaluatorError(f"Evaluator returned HTTP {resp.status_code}."),
+            )
+
+        try:
+            answers = self._extract_answers(resp.json())
+            evaluation = self._parse_evaluation(
+                answers, latency_ms=(time.perf_counter() - started) * 1000.0
+            )
+        except MalformedEvaluationError as error:
+            return self._resolve_failure(context, policy, error)
+        except Exception as error:
+            return self._resolve_failure(
+                context,
+                policy,
+                MalformedEvaluationError(type(error).__name__),
+            )
+        return evaluation
+
+    def _resolve_failure(
+        self,
+        context: GuardContext,
+        policy: Policy,
+        error: EvaluatorError,
+    ) -> Evaluation:
+        failure_mode = (
+            policy.on_timeout
+            if isinstance(error, EvaluatorTimeout)
+            else policy.on_evaluator_error
+        )
+        if failure_mode == FailureMode.HEURISTIC:
+            return self._heuristic_fallback(
+                context.tool_name, str(context.args), type(error).__name__
+            )
+        raise error
+
+    def _parse_evaluation(
+        self, answers: Dict[str, Any], latency_ms: float
+    ) -> Evaluation:
+        if not isinstance(answers, dict) or not answers:
+            raise MalformedEvaluationError("Evaluator returned empty answers.")
+
+        risk_info = answers.get("risk_level")
+        destructive_info = answers.get("is_destructive")
+        blast_info = answers.get("blast_radius")
+        if not all(isinstance(value, dict) for value in (
+            risk_info, destructive_info, blast_info
+        )):
+            raise MalformedEvaluationError("Evaluator answer fields are missing.")
+
+        risk_level = (
+            risk_info.get("choice")
+            or risk_info.get("selected")
+            or risk_info.get("value")
+        )
+        if risk_level not in {"safe", "medium_risk", "critical_danger"}:
+            raise MalformedEvaluationError("Evaluator returned an invalid risk level.")
+
+        confidence = self._bounded_number(
+            risk_info.get("confidence"), "risk confidence", 0.0, 1.0
+        )
+        if "noul" in destructive_info:
+            irreversibility_raw = destructive_info.get("noul")
+        elif "p_true" in destructive_info:
+            irreversibility_raw = destructive_info.get("p_true")
+        else:
+            irreversibility_raw = destructive_info.get("value")
+        irreversibility = self._bounded_number(
+            irreversibility_raw, "irreversibility", 0.0, 1.0
+        )
+        blast_radius = self._bounded_number(
+            blast_info.get("score"), "blast radius", 0.0, 4.0
+        )
+        return Evaluation(
+            risk_level=risk_level,
+            irreversibility=irreversibility,
+            blast_radius=blast_radius,
+            confidence=confidence,
+            source="jev",
+            latency_ms=max(latency_ms, 0.0),
         )
 
-    def _heuristic_fallback(self, tool_name: str, args_repr: str, reason: str) -> Dict[str, Any]:
-        """本地启发式兜底：零依赖离线可用；返回与官方一致的 answers 结构。"""
+    @staticmethod
+    def _bounded_number(
+        value: Any, field_name: str, minimum: float, maximum: float
+    ) -> float:
+        if isinstance(value, bool):
+            raise MalformedEvaluationError(
+                f"Evaluator returned an invalid {field_name}."
+            )
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise MalformedEvaluationError(
+                f"Evaluator returned an invalid {field_name}."
+            )
+        if not math.isfinite(number) or not minimum <= number <= maximum:
+            raise MalformedEvaluationError(
+                f"Evaluator returned an invalid {field_name}."
+            )
+        return number
+
+    @staticmethod
+    def _evaluation_to_answers(evaluation: Evaluation) -> Dict[str, Any]:
+        answers = {
+            "risk_level": {
+                "type": "choice",
+                "choice": evaluation.risk_level,
+                "selected": evaluation.risk_level,
+                "confidence": evaluation.confidence,
+            },
+            "is_destructive": {
+                "type": "noul",
+                "noul": evaluation.irreversibility,
+                "p_true": evaluation.irreversibility,
+            },
+            "blast_radius": {
+                "type": "score",
+                "score": evaluation.blast_radius,
+            },
+        }
+        if evaluation.source == "heuristic":
+            answers["_meta"] = {"fallback": True, "reason": "Heuristic Fallback"}
+        return answers
+
+    def _heuristic_fallback(
+        self, tool_name: str, args_repr: str, reason: str
+    ) -> Evaluation:
+        """Return the explicit local heuristic fallback evaluation."""
+        del reason
         combined = f"{tool_name} {args_repr}".lower()
         patterns = [
             r"rm\s+-rf", r"drop\s+table", r"drop\s+database", r"format\s+[a-z]:",
@@ -279,23 +432,10 @@ class JevClient:
             re.search(pat, combined) for pat in patterns
         )
 
-        return {
-            "risk_level": {
-                "type": "choice",
-                "choice": "critical_danger" if is_danger else "safe",
-                "selected": "critical_danger" if is_danger else "safe",  # 向后兼容旧解析
-                "confidence": 0.99 if is_danger else 0.85,
-                "probabilities": {"safe": 0.01 if is_danger else 0.85, "critical_danger": 0.99 if is_danger else 0.05, "medium_risk": 0.10}
-            },
-            "is_destructive": {
-                "type": "noul",
-                "noul": 0.99 if is_danger else 0.01,
-                "p_true": 0.99 if is_danger else 0.01  # 向后兼容旧解析
-            },
-            "blast_radius": {
-                "type": "score",
-                "score": 4.0 if is_danger else 0.0,
-                "confidence": 0.90
-            },
-            "_meta": {"fallback": True, "reason": reason}
-        }
+        return Evaluation(
+            risk_level="critical_danger" if is_danger else "safe",
+            irreversibility=0.99 if is_danger else 0.01,
+            blast_radius=4.0 if is_danger else 0.0,
+            confidence=0.99 if is_danger else 0.85,
+            source="heuristic",
+        )

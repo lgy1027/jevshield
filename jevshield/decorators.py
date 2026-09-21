@@ -2,10 +2,9 @@ import functools
 import inspect
 from typing import Any, Callable, Mapping, Optional
 from .client import JevClient
-from .core import enforce_policy
-from .exceptions import SecurityViolationError
-from .models import Action, Evaluation, FailureMode, GuardContext, GuardDecision, Policy
-from .redaction import redact_for_audit
+from .core import decide, enforce, enforce_policy
+from .exceptions import EvaluatorError, SecurityViolationError
+from .models import Evaluation, FailureMode, GuardContext, Policy
 from .rules import LocalRuleEngine, RuleOutcome, RuleResult
 
 _global_client: Optional[JevClient] = None
@@ -40,44 +39,24 @@ def guard(
         def context_for(args: tuple, kwargs: Mapping[str, Any]) -> GuardContext:
             return GuardContext(tool_name, docstring, {"args": args, "kwargs": kwargs})
 
-        def redacted_context(context: GuardContext) -> GuardContext:
-            """Create the audit-safe context retained by an exposed decision."""
-            return GuardContext(
-                tool_name=context.tool_name,
-                tool_description=redact_for_audit(context.tool_description),
-                args=redact_for_audit(context.args),
-                environment=redact_for_audit(context.environment),
-                actor_id=redact_for_audit(context.actor_id),
-                resource_scope=redact_for_audit(context.resource_scope),
-                intent=redact_for_audit(context.intent),
-            )
-
-        def raise_local_deny(context: GuardContext, result: RuleResult) -> None:
+        def enforce_local_deny(context: GuardContext, result: RuleResult) -> None:
             evaluation = Evaluation(
                 risk_level="critical_danger",
                 irreversibility=0.99,
                 blast_radius=4.0,
                 confidence=1.0,
-                source="local_rule",
+                source=(
+                    "local_rule_error"
+                    if result.outcome == RuleOutcome.ERROR
+                    else "local_rule"
+                ),
             )
-            decision = GuardDecision(
-                action=Action.DENY,
-                context=redacted_context(context),
-                evaluation=evaluation,
-                policy_name=policy.name if policy else "local_rule",
-                network_called=False,
-                redacted_arguments=redact_for_audit(context.args),
-            )
-            error = SecurityViolationError(
-                tool_name=tool_name,
-                risk_level=evaluation.risk_level,
-                reason="Blocked by local rule: " + result.reason,
-                p_destructive=evaluation.irreversibility,
-            )
-            # Task 4 will consume this same shape through decide()/enforce().
-            error.decision = decision
-            error.rule_result = result
-            raise error
+            decision = decide(context, evaluation, policy)
+            try:
+                enforce(decision)
+            except SecurityViolationError as error:
+                error.rule_result = result
+                raise
 
         def evaluate_rules(context: GuardContext) -> None:
             if policy is None:
@@ -88,12 +67,15 @@ def guard(
                 result = RuleResult(
                     RuleOutcome.ERROR,
                     "local rule engine error: " + type(error).__name__,
-                    redact_for_audit(context.args),
                 )
             if result.outcome == RuleOutcome.DENY:
-                raise_local_deny(context, result)
+                enforce_local_deny(context, result)
             if result.outcome == RuleOutcome.ERROR and policy.on_local_rule_error == FailureMode.DENY:
-                raise_local_deny(context, result)
+                enforce_local_deny(context, result)
+
+        def policy_decision(context: GuardContext, evaluation) -> None:
+            decision = decide(context, evaluation, policy)
+            enforce(decision)
 
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -107,7 +89,12 @@ def guard(
                 if policy is None:
                     decision = await active_client.aevaluate(tool_name, docstring, args_repr)
                 else:
-                    decision = await active_client.aevaluate_context(context, policy)
+                    try:
+                        evaluation = await active_client.aevaluate_context(context, policy)
+                    except EvaluatorError as error:
+                        evaluation = error
+                    policy_decision(context, evaluation)
+                    return await func(*args, **kwargs)
 
                 # 策略裁决
                 enforce_policy(
@@ -135,7 +122,12 @@ def guard(
             if policy is None:
                 decision = active_client.evaluate(tool_name, docstring, args_repr)
             else:
-                decision = active_client.evaluate_context(context, policy)
+                try:
+                    evaluation = active_client.evaluate_context(context, policy)
+                except EvaluatorError as error:
+                    evaluation = error
+                policy_decision(context, evaluation)
+                return func(*args, **kwargs)
 
             # 策略裁决
             enforce_policy(

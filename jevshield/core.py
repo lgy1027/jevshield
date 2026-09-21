@@ -1,6 +1,14 @@
 import sys
-from typing import Dict, Any, Tuple, Optional
-from .exceptions import SecurityViolationError
+from typing import Any, Dict, Optional, Tuple, Union
+
+from .exceptions import (
+    EvaluatorError,
+    EvaluatorTimeout,
+    MalformedEvaluationError,
+    SecurityViolationError,
+)
+from .models import Action, Evaluation, GuardContext, GuardDecision, Policy
+from .redaction import redact_for_audit
 
 RISK_TIERS = {
     "safe": 1,
@@ -19,6 +27,109 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _redacted_context(context: GuardContext) -> GuardContext:
+    """Return the audit-safe context retained on a decision."""
+
+    return GuardContext(
+        tool_name=context.tool_name,
+        tool_description=redact_for_audit(context.tool_description),
+        args=redact_for_audit(context.args),
+        environment=redact_for_audit(context.environment),
+        actor_id=redact_for_audit(context.actor_id),
+        resource_scope=redact_for_audit(context.resource_scope),
+        intent=redact_for_audit(context.intent),
+    )
+
+
+def _failure_evaluation(error: EvaluatorError) -> Evaluation:
+    if isinstance(error, EvaluatorTimeout):
+        source = "evaluator_timeout"
+    elif isinstance(error, MalformedEvaluationError):
+        source = "malformed_evaluation"
+    else:
+        source = "evaluator_error"
+    return Evaluation(
+        risk_level="critical_danger",
+        irreversibility=1.0,
+        blast_radius=BLAST_MAX,
+        confidence=1.0,
+        source=source,
+    )
+
+
+def decide(
+    context: GuardContext,
+    evaluation: Union[Evaluation, EvaluatorError],
+    policy: Policy,
+) -> GuardDecision:
+    """Map structured signals to an action without performing I/O."""
+
+    network_called = True
+    if isinstance(evaluation, EvaluatorError):
+        network_called = evaluation.network_called
+        evaluation = _failure_evaluation(evaluation)
+        action = Action.DENY
+    else:
+        network_called = evaluation.source not in {
+            "heuristic",
+            "local_rule",
+            "local_rule_error",
+        }
+        risk_tier = RISK_TIERS.get(evaluation.risk_level)
+        threshold_tier = RISK_TIERS.get(policy.risk_threshold, 3)
+        irreversible = _safe_float(evaluation.irreversibility)
+        blast_radius = _safe_float(evaluation.blast_radius, BLAST_MAX)
+        blocked = (
+            risk_tier is None
+            or (risk_tier >= threshold_tier and irreversible > 0.75)
+            or (blast_radius >= BLAST_BLOCK_THRESHOLD and irreversible > 0.5)
+        )
+        low_confidence = (
+            policy.min_confidence > 0.0
+            and _safe_float(evaluation.confidence, -1.0) < policy.min_confidence
+        )
+        if blocked:
+            action = Action.DENY
+        elif low_confidence:
+            action = Action.ASK
+        else:
+            action = Action.ALLOW
+
+    safe_context = _redacted_context(context)
+    return GuardDecision(
+        action=action,
+        context=safe_context,
+        evaluation=evaluation,
+        policy_name=policy.name,
+        network_called=network_called,
+        redacted_arguments=redact_for_audit(context.args),
+    )
+
+
+def enforce(decision: GuardDecision, confirmer=None) -> None:
+    """Enforce a completed decision; confirmation is implemented in Task 5."""
+
+    del confirmer
+    if decision.action != Action.DENY:
+        return
+
+    reasons = {
+        "local_rule": "Blocked by local rule.",
+        "local_rule_error": "Blocked after local rule failure.",
+        "evaluator_timeout": "Blocked after evaluator timeout.",
+        "malformed_evaluation": "Blocked after malformed evaluator response.",
+        "evaluator_error": "Blocked after evaluator failure.",
+    }
+    evaluation = decision.evaluation
+    raise SecurityViolationError(
+        tool_name=decision.context.tool_name,
+        risk_level=evaluation.risk_level,
+        reason=reasons.get(evaluation.source, "Blocked automatically by policy."),
+        p_destructive=evaluation.irreversibility,
+        decision=decision,
+    )
 
 
 def enforce_policy(
