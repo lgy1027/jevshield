@@ -2,5 +2,31 @@ from .decorators import guard
 from .exceptions import JevGuardError, SecurityViolationError
 from .client import JevClient
 from .integrators import guard_langchain_tool
+from .models import (
+    Action,
+    DevelopmentPolicy,
+    Evaluation,
+    FailureMode,
+    GuardContext,
+    GuardDecision,
+    Policy,
+    ProductionPolicy,
+    StagingPolicy,
+)
 
-__all__ = ["guard", "SecurityViolationError", "JevGuardError", "JevClient", "guard_langchain_tool"]
+__all__ = [
+    "Action",
+    "DevelopmentPolicy",
+    "Evaluation",
+    "FailureMode",
+    "GuardContext",
+    "GuardDecision",
+    "JevClient",
+    "JevGuardError",
+    "Policy",
+    "ProductionPolicy",
+    "SecurityViolationError",
+    "StagingPolicy",
+    "guard",
+    "guard_langchain_tool",
+]

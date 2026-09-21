@@ -6,6 +6,7 @@ from unittest import mock
 from jevshield.client import JevClient, DEFAULT_BACKEND
 from jevshield.core import enforce_policy, BLAST_MAX
 from jevshield.exceptions import SecurityViolationError
+from jevshield import Action, GuardContext, ProductionPolicy
 
 
 def make_decision(risk="safe", conf=0.9, noul=0.01, blast=0.0):
@@ -20,6 +21,25 @@ def make_decision(risk="safe", conf=0.9, noul=0.01, blast=0.0):
 def make_client(**kwargs):
     """构造一个强制 mock 模式、避免真实网络与环境变量干扰的客户端。"""
     return JevClient(api_key=None, backend="typesafe", **kwargs)
+
+
+class TestPublicGuardModels(unittest.TestCase):
+    def test_production_policy_defaults_to_deny_on_failures(self):
+        policy = ProductionPolicy()
+        self.assertEqual(policy.on_evaluator_error.value, "deny")
+        self.assertEqual(policy.on_timeout.value, "deny")
+        self.assertEqual(policy.ask_timeout, 30.0)
+
+    def test_guard_context_keeps_optional_scope_metadata(self):
+        context = GuardContext(
+            "delete_db",
+            "Deletes a database",
+            {"name": "prod"},
+            environment="production",
+            resource_scope=("db:prod",),
+        )
+        self.assertEqual(context.environment, "production")
+        self.assertEqual(context.resource_scope, ("db:prod",))
 
 
 class TestEnforcePolicy(unittest.TestCase):
