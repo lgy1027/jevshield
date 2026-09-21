@@ -8,7 +8,7 @@ from unittest import mock
 from jevshield.client import JevClient, DEFAULT_BACKEND
 from jevshield.core import enforce_policy, BLAST_MAX
 from jevshield.exceptions import SecurityViolationError
-from jevshield import Action, GuardContext, ProductionPolicy
+from jevshield import Action, GuardContext, ProductionPolicy, guard
 from jevshield.redaction import (
     build_evaluation_state,
     redact_for_audit,
@@ -22,6 +22,11 @@ def make_decision(risk="safe", conf=0.9, noul=0.01, blast=0.0):
         "is_destructive": {"type": "noul", "noul": noul},
         "blast_radius": {"type": "score", "score": blast},
     }
+
+
+def safe_evaluation():
+    """Construct a safe evaluator result for decorator compatibility tests."""
+    return make_decision()
 
 
 def make_client(**kwargs):
@@ -46,6 +51,33 @@ class TestPublicGuardModels(unittest.TestCase):
         )
         self.assertEqual(context.environment, "production")
         self.assertEqual(context.resource_scope, ("db:prod",))
+
+
+class TestLocalRuleShortCircuit(unittest.TestCase):
+    def test_local_deny_blocks_without_evaluator_network_call(self):
+        client = mock.Mock()
+        client.evaluate_context.side_effect = AssertionError(
+            "remote evaluator must not run"
+        )
+
+        @guard(policy=ProductionPolicy(), client=client)
+        def run(command):
+            return "executed"
+
+        with self.assertRaises(SecurityViolationError):
+            run("rm -rf /etc")
+        client.evaluate_context.assert_not_called()
+
+    def test_local_no_match_reaches_evaluator(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+
+        @guard(policy=ProductionPolicy(), client=client)
+        def list_files(path):
+            return path
+
+        self.assertEqual(list_files("/var/log"), "/var/log")
+        client.evaluate_context.assert_called_once()
 
 
 class TestEnforcePolicy(unittest.TestCase):
