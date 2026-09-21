@@ -386,6 +386,23 @@ class TestConfirmationAndAudit(unittest.TestCase):
 
         asyncio.run(exercise())
 
+    def test_async_confirmer_cannot_approve_after_blocking_past_deadline(self):
+        class EventLoopBlockingConfirmer:
+            async def confirm(self, decision, timeout):
+                time.sleep(0.05)
+                return True
+
+        async def exercise():
+            with self.assertRaises(SecurityViolationError) as raised:
+                await aenforce(
+                    self.ask_decision(),
+                    confirmer=EventLoopBlockingConfirmer(),
+                    ask_timeout=0.01,
+                )
+            self.assertIn("timed out", raised.exception.reason.lower())
+
+        asyncio.run(exercise())
+
     def test_audit_sink_failure_is_sanitized_without_second_emit(self):
         secret = "sk-audit-callback-secret-value"
 

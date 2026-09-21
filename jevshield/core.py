@@ -200,15 +200,21 @@ async def _run_async_confirmer(
 
     if timeout <= 0.0:
         return "timeout", False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     confirmation_task = asyncio.create_task(confirmer.confirm(decision, timeout))
     deadline_task = asyncio.create_task(asyncio.sleep(timeout))
     done, _ = await asyncio.wait(
         {confirmation_task, deadline_task},
         return_when=asyncio.FIRST_COMPLETED,
     )
-    if deadline_task in done:
-        confirmation_task.cancel()
-        confirmation_task.add_done_callback(_consume_task_result)
+    if deadline_task in done or loop.time() >= deadline:
+        deadline_task.cancel()
+        if confirmation_task.done():
+            _consume_task_result(confirmation_task)
+        else:
+            confirmation_task.cancel()
+            confirmation_task.add_done_callback(_consume_task_result)
         return "timeout", False
 
     deadline_task.cancel()
