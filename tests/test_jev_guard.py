@@ -11,7 +11,14 @@ import httpx
 
 from jevshield.client import JevClient, DEFAULT_BACKEND
 from jevshield.audit import CallbackAuditSink
-from jevshield.core import BLAST_MAX, aenforce, decide, enforce, enforce_policy
+from jevshield.core import (
+    BLAST_MAX,
+    CLIConfirmer,
+    aenforce,
+    decide,
+    enforce,
+    enforce_policy,
+)
 from jevshield.exceptions import (
     EvaluatorError,
     EvaluatorTimeout,
@@ -356,6 +363,65 @@ class TestConfirmationAndAudit(unittest.TestCase):
 
         self.assertEqual(confirmer.timeout, 0.25)
         self.assertEqual([event.outcome for event in seen], ["ask-approval"])
+
+    def test_async_confirmer_cannot_approve_after_suppressing_cancellation(self):
+        class CancellationSuppressingConfirmer:
+            async def confirm(self, decision, timeout):
+                try:
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    await asyncio.sleep(0.25)
+                    return True
+
+        async def exercise():
+            started = time.monotonic()
+            with self.assertRaises(SecurityViolationError) as raised:
+                await aenforce(
+                    self.ask_decision(),
+                    confirmer=CancellationSuppressingConfirmer(),
+                    ask_timeout=0.01,
+                )
+            self.assertIn("timed out", raised.exception.reason.lower())
+            self.assertLess(time.monotonic() - started, 0.15)
+
+        asyncio.run(exercise())
+
+    def test_audit_sink_failure_is_sanitized_without_second_emit(self):
+        secret = "sk-audit-callback-secret-value"
+
+        class FailingSink:
+            def __init__(self):
+                self.calls = 0
+
+            def emit(self, event):
+                self.calls += 1
+                raise RuntimeError("audit callback leaked " + secret)
+
+        sink = FailingSink()
+        decision = self.deny_decision(args={"token": "sk-context-secret-value"})
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            enforce(decision, audit_sink=sink)
+
+        self.assertEqual(sink.calls, 1)
+        self.assertEqual(raised.exception.reason, "Audit sink failed closed.")
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertNotIn("sk-context-secret-value", repr(raised.exception.decision))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_cli_confirmer_honors_timeout_when_input_blocks(self):
+        def blocking_input(prompt):
+            del prompt
+            time.sleep(0.25)
+            return "y"
+
+        started = time.monotonic()
+        with mock.patch("builtins.input", side_effect=blocking_input):
+            approved = CLIConfirmer().confirm(self.ask_decision(), timeout=0.01)
+
+        self.assertFalse(approved)
+        self.assertLess(time.monotonic() - started, 0.15)
 
     def test_guard_forwards_policy_timeout_confirmer_and_audit_sink(self):
         client = mock.Mock()

@@ -46,7 +46,6 @@ class CLIConfirmer:
     """Interactive terminal confirmer for the policy-based guard path."""
 
     def confirm(self, decision: GuardDecision, timeout: float) -> bool:
-        del timeout
         evaluation = decision.evaluation
         print(
             "[JevShield] Confirmation required for "
@@ -54,10 +53,27 @@ class CLIConfirmer:
             f"(risk={evaluation.risk_level}, "
             f"irreversibility={evaluation.irreversibility:.1%})."
         )
-        choice = input(
-            "Authorize this execution? (Enter 'y' to approve, any other key to abort): "
-        )
-        return choice.strip().lower() == "y"
+        bounded_timeout = _bounded_ask_timeout(timeout)
+        if bounded_timeout <= 0.0:
+            return False
+        result_queue = queue.Queue(maxsize=1)
+
+        def read_choice() -> None:
+            try:
+                choice = input(
+                    "Authorize this execution? "
+                    "(Enter 'y' to approve, any other key to abort): "
+                )
+                approved = choice.strip().lower() == "y"
+            except BaseException:
+                approved = False
+            result_queue.put(approved)
+
+        threading.Thread(target=read_choice, daemon=True).start()
+        try:
+            return result_queue.get(timeout=bounded_timeout)
+        except queue.Empty:
+            return False
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -115,13 +131,18 @@ def _audit(
     audit_sink: Optional[AuditSink], outcome: str, decision: GuardDecision
 ) -> None:
     sink = audit_sink if audit_sink is not None else NullAuditSink()
-    sink.emit(AuditEvent.from_decision(decision, outcome))
+    failed = False
+    try:
+        sink.emit(AuditEvent.from_decision(decision, outcome))
+    except Exception:
+        failed = True
+    if failed:
+        raise _security_violation(decision, "Audit sink failed closed.") from None
 
 
-def _denial(
-    decision: GuardDecision, reason: str, audit_sink: Optional[AuditSink], outcome: str
+def _security_violation(
+    decision: GuardDecision, reason: str
 ) -> SecurityViolationError:
-    _audit(audit_sink, outcome, decision)
     evaluation = decision.evaluation
     return SecurityViolationError(
         tool_name=decision.context.tool_name,
@@ -130,6 +151,13 @@ def _denial(
         p_destructive=evaluation.irreversibility,
         decision=decision,
     )
+
+
+def _denial(
+    decision: GuardDecision, reason: str, audit_sink: Optional[AuditSink], outcome: str
+) -> SecurityViolationError:
+    _audit(audit_sink, outcome, decision)
+    return _security_violation(decision, reason)
 
 
 def _run_confirmer(
@@ -154,6 +182,41 @@ def _run_confirmer(
         return result_queue.get(timeout=timeout)
     except queue.Empty:
         return "timeout", False
+
+
+def _consume_task_result(task: "asyncio.Task[Any]") -> None:
+    """Retrieve a detached confirmer result without allowing it to affect policy."""
+
+    try:
+        task.exception()
+    except BaseException:
+        pass
+
+
+async def _run_async_confirmer(
+    confirmer: AsyncConfirmer, decision: GuardDecision, timeout: float
+) -> Tuple[str, bool]:
+    """Race confirmation against an irrevocable deadline."""
+
+    if timeout <= 0.0:
+        return "timeout", False
+    confirmation_task = asyncio.create_task(confirmer.confirm(decision, timeout))
+    deadline_task = asyncio.create_task(asyncio.sleep(timeout))
+    done, _ = await asyncio.wait(
+        {confirmation_task, deadline_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if deadline_task in done:
+        confirmation_task.cancel()
+        confirmation_task.add_done_callback(_consume_task_result)
+        return "timeout", False
+
+    deadline_task.cancel()
+    try:
+        result = confirmation_task.result()
+    except BaseException:
+        return "error", False
+    return "result", result is True
 
 
 def _failure_evaluation(error: EvaluatorError) -> Evaluation:
@@ -315,11 +378,11 @@ async def aenforce(
     approved = False
     try:
         if inspect.iscoroutinefunction(active_confirmer.confirm):
-            result = await asyncio.wait_for(
-                active_confirmer.confirm(safe_decision, timeout),
-                timeout=timeout,
+            state, approved = await _run_async_confirmer(
+                active_confirmer,
+                safe_decision,
+                timeout,
             )
-            approved = result is True
         else:
             state, approved = await asyncio.to_thread(
                 _run_confirmer, active_confirmer, safe_decision, timeout
