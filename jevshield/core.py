@@ -112,11 +112,14 @@ def _redacted_decision(decision: GuardDecision) -> GuardDecision:
         context=_redacted_context(decision.context),
         evaluation=Evaluation(
             risk_level=redact_for_audit(evaluation.risk_level),
-            irreversibility=evaluation.irreversibility,
-            blast_radius=evaluation.blast_radius,
-            confidence=evaluation.confidence,
+            # Evaluation values may originate in untrusted gateway output.  Do
+            # not retain scalar subclasses: their __str__/__repr__ can carry
+            # secrets into audit, confirmer, or exception boundaries.
+            irreversibility=_safe_float(evaluation.irreversibility),
+            blast_radius=_safe_float(evaluation.blast_radius),
+            confidence=_safe_float(evaluation.confidence),
             source=redact_for_audit(evaluation.source),
-            latency_ms=evaluation.latency_ms,
+            latency_ms=_safe_float(evaluation.latency_ms),
         ),
         policy_name=redact_for_audit(decision.policy_name),
         network_called=decision.network_called,
@@ -179,14 +182,18 @@ def _denial(
 
 
 def _run_confirmer(
-    confirmer: Confirmer, decision: GuardDecision, timeout: float
+    confirmer: Confirmer,
+    decision: GuardDecision,
+    timeout: float,
+    *,
+    deadline: Optional[float] = None,
 ) -> Tuple[str, bool]:
     """Run a synchronous confirmer without allowing it to block enforcement."""
 
     if timeout <= 0.0:
         return "timeout", False
     result_queue = queue.Queue(maxsize=1)
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout if deadline is None else deadline
 
     def invoke() -> None:
         try:
@@ -415,9 +422,23 @@ async def aenforce(
                 timeout,
             )
         else:
-            state, approved = await asyncio.to_thread(
-                _run_confirmer, active_confirmer, safe_decision, timeout
-            )
+            # The budget starts before queueing work in the executor.  Otherwise
+            # a saturated executor can make an expired confirmation appear fresh.
+            deadline = time.monotonic() + timeout
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0.0:
+                state = "timeout"
+            else:
+                state, approved = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _run_confirmer,
+                        active_confirmer,
+                        safe_decision,
+                        timeout,
+                        deadline=deadline,
+                    ),
+                    timeout=remaining,
+                )
     except asyncio.TimeoutError:
         state = "timeout"
     except Exception:

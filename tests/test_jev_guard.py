@@ -1,8 +1,10 @@
 """jevshield 核心逻辑测试（stdlib unittest，零第三方依赖）。"""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 from dataclasses import replace
@@ -517,6 +519,53 @@ class TestConfirmationAndAudit(unittest.TestCase):
                     ask_timeout=0.01,
                 )
             self.assertIn("timed out", raised.exception.reason.lower())
+
+        asyncio.run(exercise())
+
+    def test_async_sync_confirmer_queue_delay_counts_against_deadline(self):
+        """A queued executor job must not start a fresh confirmation budget."""
+
+        class Approver:
+            calls = 0
+
+            def confirm(self, decision, timeout):
+                del decision, timeout
+                self.calls += 1
+                return True
+
+        async def exercise():
+            executor = ThreadPoolExecutor(max_workers=1)
+            loop = asyncio.get_running_loop()
+            loop.set_default_executor(executor)
+            worker_started = threading.Event()
+            release_worker = threading.Event()
+            approver = Approver()
+
+            def occupy_worker():
+                worker_started.set()
+                release_worker.wait()
+
+            blocking_job = loop.run_in_executor(None, occupy_worker)
+            while not worker_started.is_set():
+                await asyncio.sleep(0)
+            loop.call_later(0.1, release_worker.set)
+            started = time.monotonic()
+            try:
+                with self.assertRaises(SecurityViolationError) as raised:
+                    await aenforce(
+                        self.ask_decision(),
+                        confirmer=approver,
+                        ask_timeout=0.01,
+                    )
+                self.assertIn("timed out", raised.exception.reason.lower())
+                self.assertLess(time.monotonic() - started, 0.08)
+            finally:
+                release_worker.set()
+                await blocking_job
+                await asyncio.sleep(0.02)
+                executor.shutdown(wait=True)
+
+            self.assertEqual(approver.calls, 0)
 
         asyncio.run(exercise())
 
@@ -1123,6 +1172,55 @@ class TestRedactionBoundary(unittest.TestCase):
             self.assert_secret_absent(safe_decision)
             self.assert_json_safe(safe_decision.context.args)
             self.assert_json_safe(safe_decision.redacted_arguments)
+
+    def test_evaluation_numeric_subclasses_are_normalized_before_exposure(self):
+        class SecretFloat(float):
+            def __str__(self):
+                return TestRedactionBoundary.secret
+
+            def __repr__(self):
+                return TestRedactionBoundary.secret
+
+        decision = GuardDecision(
+            action=Action.ASK,
+            context=GuardContext("run", "", {}),
+            evaluation=Evaluation(
+                risk_level="safe",
+                irreversibility=SecretFloat(0.01),
+                blast_radius=SecretFloat(0.0),
+                confidence=SecretFloat(0.2),
+                source="jev",
+                latency_ms=SecretFloat(12.0),
+            ),
+            policy_name="production",
+        )
+        confirmations = []
+        audit_events = []
+
+        class Rejecter:
+            def confirm(self, received, timeout):
+                del timeout
+                confirmations.append(received)
+                return False
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            enforce(
+                decision,
+                confirmer=Rejecter(),
+                audit_sink=CallbackAuditSink(audit_events.append),
+            )
+
+        for safe_decision in (
+            confirmations[0],
+            audit_events[0],
+            raised.exception.decision,
+        ):
+            evaluation = safe_decision.evaluation
+            self.assertNotIn(self.secret, repr(safe_decision))
+            self.assertIs(type(evaluation.irreversibility), float)
+            self.assertIs(type(evaluation.blast_radius), float)
+            self.assertIs(type(evaluation.confidence), float)
+            self.assertIs(type(evaluation.latency_ms), float)
 
 
 class FakeResponse:
