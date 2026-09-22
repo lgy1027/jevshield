@@ -210,3 +210,30 @@ def build_evaluation_state(context: GuardContext) -> str:
     return _EVALUATION_PREFIX + json.dumps(
         payload, sort_keys=True, separators=(",", ":")
     )
+
+
+def build_observed_intent_state(context: GuardContext) -> str:
+    """Frame only redacted, bounded invocation evidence for intent matching.
+
+    The trusted objective is intentionally excluded.  It is classified through
+    a separate state so untrusted tool content cannot redefine that objective.
+    """
+
+    payload = {
+        "arguments": _bounded_arguments(context.args),
+        "tool_description": _bounded_text(
+            context.tool_description, MAX_DESCRIPTION_CHARS
+        ),
+        "tool_name": _bounded_text(context.tool_name, MAX_TOOL_NAME_CHARS),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    available_for_payload = MAX_DECISION_STATE_CHARS - len(_DECISION_PREFIX)
+    if len(serialized) > available_for_payload:
+        arguments = payload["arguments"]
+        payload["arguments"] = {
+            "_truncated": "[TRUNCATED_ARGUMENTS]",
+            "_serialized_length": len(
+                json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+            ),
+        }
+    return build_decision_state(payload)

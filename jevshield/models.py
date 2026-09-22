@@ -34,6 +34,56 @@ class GuardContext:
 
 
 @dataclass(frozen=True)
+class GuardContextMetadata:
+    """Trusted host metadata that may be added to a guard invocation.
+
+    Invocation identity remains owned by ``GuardContext``.  This separate type
+    deliberately has no tool or argument fields, so a context provider cannot
+    substitute a different tool call while supplying the host's objective.
+    """
+
+    intent: Optional[str] = None
+    environment: Optional[str] = None
+    actor_id: Optional[str] = None
+    resource_scope: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in ("intent", "environment", "actor_id"):
+            value = getattr(self, field_name)
+            if value is not None and type(value) is not str:
+                raise TypeError("{} must be a string or None.".format(field_name))
+        if type(self.resource_scope) is not tuple:
+            raise TypeError("resource_scope must be a tuple of strings.")
+        if any(type(value) is not str for value in self.resource_scope):
+            raise TypeError("resource_scope must be a tuple of strings.")
+
+
+def merge_context_metadata(
+    context: GuardContext, metadata: GuardContextMetadata
+) -> GuardContext:
+    """Add trusted metadata without changing an observed invocation.
+
+    Metadata is authoritative for the optional context fields.  In particular,
+    a missing trusted intent clears any value that might have arrived with
+    untrusted invocation data, allowing the intent gate to skip safely.
+    """
+
+    if not isinstance(context, GuardContext):
+        raise TypeError("context must be a GuardContext.")
+    if not isinstance(metadata, GuardContextMetadata):
+        raise TypeError("metadata must be a GuardContextMetadata.")
+    return GuardContext(
+        tool_name=context.tool_name,
+        tool_description=context.tool_description,
+        args=context.args,
+        environment=metadata.environment,
+        actor_id=metadata.actor_id,
+        resource_scope=metadata.resource_scope,
+        intent=metadata.intent,
+    )
+
+
+@dataclass(frozen=True)
 class Evaluation:
     """Structured risk signals returned by an evaluator or local rule."""
 
