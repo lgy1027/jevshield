@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import sys
 import time
 import unittest
 from dataclasses import replace
@@ -293,6 +294,39 @@ class TestConfirmationAndAudit(unittest.TestCase):
             with self.assertRaises(SecurityViolationError):
                 enforce(decision)
 
+    def test_missing_or_broken_stdin_denies_and_audits_ask_sync(self):
+        class BrokenStdin:
+            def isatty(self):
+                raise ValueError("closed stdin")
+
+        for stdin in (None, BrokenStdin()):
+            with self.subTest(stdin=stdin), mock.patch.object(sys, "stdin", stdin):
+                seen = []
+                with self.assertRaises(SecurityViolationError):
+                    enforce(
+                        self.ask_decision(),
+                        audit_sink=CallbackAuditSink(seen.append),
+                    )
+                self.assertEqual([event.outcome for event in seen], ["ask-rejection"])
+
+    def test_missing_or_broken_stdin_denies_and_audits_ask_async(self):
+        class BrokenStdin:
+            def isatty(self):
+                raise ValueError("closed stdin")
+
+        async def exercise(stdin):
+            seen = []
+            with mock.patch.object(sys, "stdin", stdin):
+                with self.assertRaises(SecurityViolationError):
+                    await aenforce(
+                        self.ask_decision(),
+                        audit_sink=CallbackAuditSink(seen.append),
+                    )
+            self.assertEqual([event.outcome for event in seen], ["ask-rejection"])
+
+        asyncio.run(exercise(None))
+        asyncio.run(exercise(BrokenStdin()))
+
     def test_audit_sink_receives_one_redacted_event_on_deny(self):
         secret = "sk-secret-value"
         seen = []
@@ -394,6 +428,39 @@ class TestConfirmationAndAudit(unittest.TestCase):
             )
         self.assertLess(time.monotonic() - started, 0.2)
 
+    def test_late_synchronous_confirmation_never_approves_at_deadline_boundary(self):
+        class BoundaryLateApprover:
+            def confirm(self, decision, timeout):
+                time.sleep(timeout * 1.01)
+                return True
+
+        def assert_denied(enforcement):
+            approvals = 0
+            for _ in range(200):
+                try:
+                    enforcement()
+                except SecurityViolationError:
+                    continue
+                approvals += 1
+            self.assertEqual(approvals, 0)
+
+        assert_denied(
+            lambda: enforce(
+                self.ask_decision(),
+                confirmer=BoundaryLateApprover(),
+                ask_timeout=0.002,
+            )
+        )
+
+        async def enforce_async():
+            await aenforce(
+                self.ask_decision(),
+                confirmer=BoundaryLateApprover(),
+                ask_timeout=0.002,
+            )
+
+        assert_denied(lambda: asyncio.run(enforce_async()))
+
     def test_async_confirmer_approval_is_bounded_and_audited(self):
         seen = []
 
@@ -488,6 +555,15 @@ class TestConfirmationAndAudit(unittest.TestCase):
 
         self.assertFalse(approved)
         self.assertLess(time.monotonic() - started, 0.15)
+
+    def test_cli_confirmer_rejects_approval_returned_after_deadline(self):
+        def late_approval(prompt):
+            del prompt
+            time.sleep(0.011)
+            return "y"
+
+        with mock.patch("builtins.input", side_effect=late_approval):
+            self.assertFalse(CLIConfirmer().confirm(self.ask_decision(), timeout=0.01))
 
     def test_guard_forwards_policy_timeout_confirmer_and_audit_sink(self):
         client = mock.Mock()
@@ -888,6 +964,110 @@ class TestPayloadAndState(unittest.TestCase):
         state = client._prune_state("run", "", "x" * 801, max_chars=800)
         payload = json.loads(state.rsplit("\n", 1)[1])
         self.assertEqual(len(payload["arguments"]["args_repr"]), 800)
+
+
+class TestRedactionBoundary(unittest.TestCase):
+    secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+
+    class SecretObject:
+        def __str__(self):
+            return TestRedactionBoundary.secret
+
+        def __repr__(self):
+            return TestRedactionBoundary.secret
+
+    def secret_payload(self):
+        return {
+            self.secret: {
+                "bytes": self.secret.encode(),
+                "object": self.SecretObject(),
+                "nested": [{"again": self.secret.encode()}],
+            },
+        }
+
+    def assert_secret_absent(self, value):
+        self.assertNotIn(self.secret, repr(value))
+
+    def assert_json_safe(self, value):
+        json.dumps(value, sort_keys=True)
+
+    def test_evaluation_state_normalizes_bytes_objects_keys_and_nested_containers(self):
+        state = build_evaluation_state(
+            GuardContext("run", "", self.secret_payload())
+        )
+
+        self.assertNotIn(self.secret, state)
+        payload = json.loads(state.rsplit("\n", 1)[1])
+        self.assert_secret_absent(payload)
+        self.assert_json_safe(payload)
+
+    def test_evaluation_state_redacts_non_string_context_fields_before_text_conversion(self):
+        state = build_evaluation_state(
+            GuardContext(
+                self.SecretObject(),
+                self.secret.encode(),
+                {},
+                intent=self.SecretObject(),
+            )
+        )
+
+        self.assertNotIn(self.secret, state)
+        payload = json.loads(state.rsplit("\n", 1)[1])
+        self.assert_secret_absent(payload)
+        self.assert_json_safe(payload)
+
+    def test_remote_evaluator_never_receives_non_string_secret_representations(self):
+        client = make_client()
+        client.is_mock_mode = False
+        client.api_key = "test-key"
+        client._http_client = mock.Mock()
+        client._http_client.post.return_value = FakeResponse(
+            200, {"answers": make_decision()}
+        )
+
+        client.evaluate_context(
+            GuardContext("run", "", self.secret_payload()), ProductionPolicy()
+        )
+
+        state = client._http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn(self.secret, state)
+        payload = json.loads(state.rsplit("\n", 1)[1])
+        self.assert_secret_absent(payload)
+        self.assert_json_safe(payload)
+
+    def test_audit_confirmer_and_attached_exception_receive_safe_normalized_values(self):
+        decision = GuardDecision(
+            action=Action.ASK,
+            context=GuardContext("run", "", self.secret_payload()),
+            evaluation=low_confidence_evaluation(),
+            policy_name="production",
+        )
+        confirmations = []
+        audit_events = []
+
+        class Rejecter:
+            def confirm(self, received, timeout):
+                del timeout
+                confirmations.append(received)
+                return False
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            enforce(
+                decision,
+                confirmer=Rejecter(),
+                audit_sink=CallbackAuditSink(audit_events.append),
+            )
+
+        self.assertEqual(len(confirmations), 1)
+        self.assertEqual(len(audit_events), 1)
+        for safe_decision in (
+            confirmations[0],
+            audit_events[0],
+            raised.exception.decision,
+        ):
+            self.assert_secret_absent(safe_decision)
+            self.assert_json_safe(safe_decision.context.args)
+            self.assert_json_safe(safe_decision.redacted_arguments)
 
 
 class FakeResponse:
