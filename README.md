@@ -4,15 +4,16 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
-**Framework-agnostic runtime security gate for AI Agents powered by Jev (System-1 Models).**
+**A framework-agnostic decision-control SDK for AI agents powered by Jev (System-1 Models).**
 
-Traditional LLM guardrails rely on slow, autoregressive generation: calling GPT-4o or Claude to review an action can take 1.5 to 4 seconds, burn thousands of output tokens, and occasionally fail due to JSON parsing syntax errors.
+`jevshield` provides typed decision primitives for classifying requests and
+selecting application routes. Its Guard remains the execution-time security
+layer: a protected operation is evaluated before it is invoked and dangerous
+operations can be denied.
 
-`jevshield` cuts out the conversational fluff. By taking advantage of **TypeSafe AI's Jev model**, it performs single-pass, typed evaluations directly on logits:
-* **Zero Output Token Billing** (Jev charges $0 for output generation).
-* **Typed single-pass evaluation** via prefill logits readout.
-* **Dual-Validation Matrix**: Cross-evaluates **Severity Tier (Choice)** with **Irreversibility Probability (Noul/Boolean)** to eliminate false alarms.
-* **Zero-Config Local Fallback**: Instant local heuristic evaluation out of the box when no API key is provided.
+* **Typed decisions** use explicit Choice results and statuses.
+* **Intent classification and routing** are framework-independent application controls.
+* **Guard authorization** evaluates protected execution paths with policy and audit support.
 
 ---
 
@@ -231,6 +232,97 @@ def format_volume(device: str):
 
 # Automatically patches both sync (_run) and async (_arun) paths
 guarded_format = guard_langchain_tool(format_volume, policy=ProductionPolicy())
+```
+
+## Typed Intent Classification
+
+Classify application requests with a string `Enum` and complete descriptions
+for every intent. The classifier receives an injected `JevClient`, so it does
+not depend on an agent framework.
+
+```python
+from enum import Enum
+
+from jevshield import DecisionStatus, IntentClassifier, JevClient
+
+
+class SupportIntent(str, Enum):
+    ORDER_STATUS = "order_status"
+    KNOWLEDGE_BASE = "knowledge_base"
+
+
+client = JevClient(api_key="ts-...")
+classifier = IntentClassifier(
+    SupportIntent,
+    {
+        SupportIntent.ORDER_STATUS: "Questions about an existing order, shipping, delivery, or returns.",
+        SupportIntent.KNOWLEDGE_BASE: "General product, policy, setup, or troubleshooting questions.",
+    },
+    client=client,
+    min_confidence=0.7,
+)
+
+result = classifier.classify({"request": "Where is order 12345?"})
+if result.status is DecisionStatus.RESOLVED:
+    handle_intent(result.value)
+elif result.status is DecisionStatus.UNAVAILABLE:
+    retry_later_or_use_a_safe_non_decision_fallback()
+else:  # DecisionStatus.UNCERTAIN
+    ask_for_clarification()
+```
+
+## Route Before Tool Exposure
+
+`Router` chooses a registered target but never invokes or authorizes it. The
+application explicitly decides whether and how to call `selection.target`.
+
+```python
+from jevshield import DecisionStatus, JevClient, Route, Router
+
+
+def answer_order_question(request: str) -> str:
+    return lookup_order(request)
+
+
+def answer_knowledge_question(request: str) -> str:
+    return search_knowledge_base(request)
+
+
+router = Router(
+    {
+        "orders": Route(
+            description="Questions about existing orders, shipping, delivery, or returns.",
+            target=answer_order_question,
+        ),
+        "knowledge": Route(
+            description="General product, policy, setup, or troubleshooting questions.",
+            target=answer_knowledge_question,
+        ),
+    },
+    client=JevClient(api_key="ts-..."),
+    min_confidence=0.7,
+)
+
+selection = router.select({"request": user_request})
+if selection.status is DecisionStatus.RESOLVED and selection.target is not None:
+    response = selection.target(user_request)  # Application code chooses this invocation.
+elif selection.status is DecisionStatus.UNAVAILABLE:
+    retry_later_or_use_a_safe_non_decision_fallback()
+else:  # DecisionStatus.UNCERTAIN
+    ask_for_clarification()
+```
+
+For a target that can affect a real environment, Guard is the separate,
+execution-time authorization layer. Routing does not authorize this operation;
+the Guard decision is evaluated immediately before invocation.
+
+```python
+from jevshield import ProductionPolicy, guard
+
+
+@guard(policy=ProductionPolicy())
+def cancel_order(order_id: str) -> str:
+    return orders_api.cancel(order_id)
 ```
 
 ## Local Agent Loop Termination

@@ -37,6 +37,21 @@ class TestDecisionState(unittest.TestCase):
 
 
 class TestRuntimeContracts(unittest.TestCase):
+    def test_public_package_exports_decision_sdk_api(self):
+        from jevshield import (
+            ChoiceAnswer, ChoiceQuestion, DecisionStatus, IntentClassifier,
+            IntentResult, Route, RouteSelection, Router,
+        )
+
+        self.assertEqual(DecisionStatus.RESOLVED.value, "resolved")
+        self.assertTrue(ChoiceQuestion)
+        self.assertTrue(ChoiceAnswer)
+        self.assertTrue(IntentClassifier)
+        self.assertTrue(IntentResult)
+        self.assertTrue(Route)
+        self.assertTrue(RouteSelection)
+        self.assertTrue(Router)
+
     def test_resolved_choice_requires_known_value_and_bounded_numbers(self):
         answer = ChoiceAnswer(
             value="orders",

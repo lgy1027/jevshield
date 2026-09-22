@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jevshield"
 version = "0.1.1"
-description = "Sub-100ms, Typed Guardrail Middleware for AI Agents powered by Jev System-1 Models."
+description = "Framework-agnostic decision-control SDK for AI agents powered by Jev."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [
     { name = "lgy1027", email = "lgy10271416@gmail.com" },
 ]
-keywords = ["guardrails", "ai-agents", "ai-safety", "jev", "typesafe", "tool-calling", "langchain", "security"]
+keywords = ["guardrails", "ai-agents", "ai-safety", "jev", "typesafe", "tool-calling", "langchain", "security", "intent-classification", "routing", "decision-control"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

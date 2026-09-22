@@ -3,6 +3,7 @@ from .exceptions import JevGuardError, SecurityViolationError
 from .client import JevClient
 from .classify import IntentClassifier, IntentResult
 from .route import Route, RouteSelection, Router
+from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 from .integrators import guard_langchain_tool
 from .loop import LoopAction, LoopDecision, LoopPolicy, LoopStep, LoopTerminator
 from .models import (
@@ -19,6 +20,9 @@ from .models import (
 
 __all__ = [
     "Action",
+    "ChoiceAnswer",
+    "ChoiceQuestion",
+    "DecisionStatus",
     "DevelopmentPolicy",
     "Evaluation",
     "FailureMode",
