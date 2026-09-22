@@ -10,6 +10,7 @@ import httpx
 from .exceptions import EvaluatorError, EvaluatorTimeout, MalformedEvaluationError
 from .models import Evaluation, FailureMode, GuardContext, Policy
 from .redaction import build_evaluation_state
+from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -189,6 +190,21 @@ class JevClient:
             }
         }
 
+    def _build_choice_payload(
+        self, state: str, question: ChoiceQuestion
+    ) -> Dict[str, Any]:
+        return {
+            "model": self.model,
+            "state": state,
+            "questions": {
+                question.name: {
+                    "type": "choice",
+                    "instructions": question.instructions,
+                    "criteria": dict(question.criteria),
+                }
+            },
+        }
+
     def _extract_answers(self, data: Any) -> Dict[str, Any]:
         """提取 answers 映射；兼容早期网关包装的 results/questions。"""
         if not isinstance(data, dict):
@@ -251,6 +267,40 @@ class JevClient:
             )
         return self._legacy_fallback(
             tool_name, args_repr, "Gateway Non-200 Fallback"
+        )
+
+    def choose(self, state: str, question: ChoiceQuestion) -> ChoiceAnswer:
+        if not isinstance(state, str) or not state:
+            raise ValueError("Choice state must be a non-empty string.")
+        if self.is_mock_mode:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE, 0.0, "unconfigured",
+                "No API key is configured.",
+            )
+        started = time.perf_counter()
+        try:
+            response = self._post_payload(self._build_choice_payload(state, question))
+        except (httpx.TimeoutException, TimeoutError):
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "timeout",
+                "Evaluator timed out.",
+            )
+        except Exception as error:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "transport_error",
+                type(error).__name__,
+            )
+        if response.status_code != 200:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "http_error",
+                "HTTP {}".format(response.status_code),
+            )
+        return self._parse_choice_answer(
+            self._extract_answers(response.json()), question,
+            (time.perf_counter() - started) * 1000.0,
         )
 
     def evaluate_context(
@@ -329,6 +379,42 @@ class JevClient:
             )
         return self._legacy_fallback(
             tool_name, args_repr, "Gateway Non-200 Fallback"
+        )
+
+    async def achoose(self, state: str, question: ChoiceQuestion) -> ChoiceAnswer:
+        if not isinstance(state, str) or not state:
+            raise ValueError("Choice state must be a non-empty string.")
+        if self.is_mock_mode:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE, 0.0, "unconfigured",
+                "No API key is configured.",
+            )
+        started = time.perf_counter()
+        try:
+            response = await self._apost_payload(
+                self._build_choice_payload(state, question)
+            )
+        except (httpx.TimeoutException, TimeoutError):
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "timeout",
+                "Evaluator timed out.",
+            )
+        except Exception as error:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "transport_error",
+                type(error).__name__,
+            )
+        if response.status_code != 200:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "http_error",
+                "HTTP {}".format(response.status_code),
+            )
+        return self._parse_choice_answer(
+            self._extract_answers(response.json()), question,
+            (time.perf_counter() - started) * 1000.0,
         )
 
     async def aevaluate_context(
@@ -442,6 +528,41 @@ class JevClient:
             confidence=confidence,
             source="jev",
             latency_ms=max(latency_ms, 0.0),
+        )
+
+    def _parse_choice_answer(
+        self, answers: Dict[str, Any], question: ChoiceQuestion, latency_ms: float
+    ) -> ChoiceAnswer:
+        unavailable = lambda reason: ChoiceAnswer(
+            None, 0.0, DecisionStatus.UNAVAILABLE, max(latency_ms, 0.0),
+            "invalid_response", reason,
+        )
+        if not isinstance(answers, dict):
+            return unavailable("Evaluator returned invalid answers.")
+        answer = answers.get(question.name)
+        if not isinstance(answer, dict):
+            return unavailable("Evaluator answer is missing.")
+        try:
+            confidence = self._bounded_number(
+                answer.get("confidence"), "choice confidence", 0.0, 1.0
+            )
+        except MalformedEvaluationError:
+            return unavailable("Evaluator returned an invalid choice confidence.")
+        selected = (
+            answer.get("choice")
+            or answer.get("selected")
+            or answer.get("value")
+        )
+        if not isinstance(selected, str):
+            return unavailable("Evaluator returned an invalid choice.")
+        if selected not in question.criteria:
+            return ChoiceAnswer(
+                None, confidence, DecisionStatus.UNCERTAIN,
+                max(latency_ms, 0.0), "jev", "Evaluator selected an unknown choice.",
+            )
+        return ChoiceAnswer(
+            selected, confidence, DecisionStatus.RESOLVED,
+            max(latency_ms, 0.0), "jev",
         )
 
     @staticmethod

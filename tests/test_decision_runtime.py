@@ -1,8 +1,22 @@
+import asyncio
 import math
 import unittest
+from unittest import mock
 
+import httpx
+
+from jevshield.client import JevClient
 from jevshield.redaction import build_decision_state
 from jevshield.runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
+
+
+class FakeResponse:
+    def __init__(self, status_code, json_data=None):
+        self.status_code = status_code
+        self._json_data = json_data or {}
+
+    def json(self):
+        return self._json_data
 
 
 class TestDecisionState(unittest.TestCase):
@@ -45,3 +59,62 @@ class TestRuntimeContracts(unittest.TestCase):
             ChoiceQuestion("route", "", {"orders": "Orders"})
         with self.assertRaises(ValueError):
             ChoiceQuestion("route", "Route this request", {"": "Orders"})
+
+
+class TestJevChoiceExecution(unittest.TestCase):
+    def _client(self):
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        client._http_client = mock.Mock()
+        return client
+
+    def _question(self):
+        return ChoiceQuestion("route", "Choose the correct route.", {
+            "orders": "Order questions.", "knowledge": "Knowledge questions.",
+        })
+
+    def test_choose_builds_generic_choice_payload_and_parses_answer(self):
+        client = self._client()
+        client._http_client.post.return_value = FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "choice": "orders", "confidence": 0.92}
+        }})
+
+        answer = client.choose("passive request", self._question())
+
+        self.assertEqual(answer.status, DecisionStatus.RESOLVED)
+        self.assertEqual(answer.value, "orders")
+        payload = client._http_client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["questions"]["route"]["criteria"]["orders"], "Order questions.")
+
+    def test_choose_returns_uncertain_for_unknown_choice(self):
+        client = self._client()
+        client._http_client.post.return_value = FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "choice": "unknown", "confidence": 0.92}
+        }})
+
+        answer = client.choose("passive request", self._question())
+
+        self.assertEqual(answer.status, DecisionStatus.UNCERTAIN)
+        self.assertIsNone(answer.value)
+
+    def test_choose_returns_unavailable_on_timeout_without_heuristic_fallback(self):
+        client = self._client()
+        client._http_client.post.side_effect = httpx.ReadTimeout("slow")
+
+        answer = client.choose("passive request", self._question())
+
+        self.assertEqual(answer.status, DecisionStatus.UNAVAILABLE)
+        self.assertEqual(answer.source, "timeout")
+
+    def test_achoose_has_the_same_resolved_result(self):
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "selected": "knowledge", "confidence": 0.88}
+        }}))
+
+        answer = asyncio.run(client.achoose("passive request", self._question()))
+
+        self.assertEqual(answer.status, DecisionStatus.RESOLVED)
+        self.assertEqual(answer.value, "knowledge")
