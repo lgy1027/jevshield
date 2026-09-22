@@ -4,13 +4,13 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
-**Sub-100ms, non-autoregressive runtime security gate for AI Agents powered by Jev (System-1 Models).**
+**Framework-agnostic runtime security gate for AI Agents powered by Jev (System-1 Models).**
 
 Traditional LLM guardrails rely on slow, autoregressive generation: calling GPT-4o or Claude to review an action can take 1.5 to 4 seconds, burn thousands of output tokens, and occasionally fail due to JSON parsing syntax errors.
 
 `jevshield` cuts out the conversational fluff. By taking advantage of **TypeSafe AI's Jev model**, it performs single-pass, typed evaluations directly on logits:
 * **Zero Output Token Billing** (Jev charges $0 for output generation).
-* **True Sub-100ms Evaluation** via prefill logits readout.
+* **Typed single-pass evaluation** via prefill logits readout.
 * **Dual-Validation Matrix**: Cross-evaluates **Severity Tier (Choice)** with **Irreversibility Probability (Noul/Boolean)** to eliminate false alarms.
 * **Zero-Config Local Fallback**: Instant local heuristic evaluation out of the box when no API key is provided.
 
@@ -19,7 +19,7 @@ Traditional LLM guardrails rely on slow, autoregressive generation: calling GPT-
 ## Architecture: System-1 vs. System-2 Division
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lgy1027/jevshield/main/docs/architecture.svg" alt="JevShield architecture: the System 2 agent prepares a tool call; the System 1 JevShield middleware evaluates it in sub-100ms via Choice/Noul/Score primitives and either passes safe calls or halts destructive ones.">
+  <img src="https://raw.githubusercontent.com/lgy1027/jevshield/main/docs/architecture.svg" alt="JevShield architecture: the System 2 agent prepares a tool call; the System 1 JevShield middleware evaluates Choice, Noul, and Score primitives before either passing safe calls or halting destructive ones.">
 </p>
 
 ---
@@ -46,6 +46,8 @@ from jevshield import ProductionPolicy, SecurityViolationError, guard
 # ProductionPolicy fails closed if no evaluator is configured. Set a provider
 # key before running safe operations with this production example:
 # export TYPESAFE_API_KEY="ts-..."
+# API request timeout defaults to 2 seconds; tune it for your environment:
+# export JEV_TIMEOUT_SECONDS="10"
 
 @guard(policy=ProductionPolicy())
 def run_terminal(cmd: str):
@@ -53,7 +55,7 @@ def run_terminal(cmd: str):
     print(f"Executing: {cmd}")
     return "OK"
 
-# 1. Safe operations pass instantly
+# 1. Safe operations are evaluated before invocation
 run_terminal("ls -la /var/log")
 
 # 2. Destructive operations are halted before invocation
@@ -109,47 +111,36 @@ explicit confirmer is denied immediately. An explicit confirmer is bounded by
 `policy.ask_timeout` (at most 30 seconds); timeout, failure, or a non-approval
 also denies the call.
 
-### Migrating from the legacy decorator API
+### Required policy configuration
 
-The `risk_threshold`, `interactive`, and `min_confidence` decorator arguments
-remain available in this release but emit `DeprecationWarning`. Moving to a
-policy is an opportunity to harden production behavior; it is not always a
-behavior-preserving substitution. In particular, legacy `interactive=False`
-rejects every `ASK`, even with a TTY, while `ProductionPolicy()` may ask a
-terminal operator. Legacy evaluator failures use heuristic fallback, whereas
-`ProductionPolicy()` denies them.
+JevShield is a new policy-first API: `policy=` is required for both `guard()`
+and `guard_langchain_tool()`. Configure risk thresholds and confidence routing
+on a `Policy` instance, and supply a `confirmer=` when your runtime needs an
+explicit approval workflow. The former decorator keywords `risk_threshold`,
+`interactive`, and `min_confidence` are not accepted.
+
+### Production API timeout
+
+`JevClient` defaults to a 2-second HTTP timeout. Configure it explicitly for
+your production latency budget; an explicit constructor value overrides the
+`JEV_TIMEOUT_SECONDS` environment variable.
 
 ```python
-# Before (deprecated)
-@guard(risk_threshold="critical_danger", interactive=False, min_confidence=0.8)
-def deploy():
-    ...
+from jevshield import JevClient, ProductionPolicy, guard
 
-# Behavior-compatible replacement
-from jevshield import Policy, guard
+# Environment-wide default for clients created by the integration.
+# export JEV_TIMEOUT_SECONDS="10"
 
-class DenyAsk:
-    def confirm(self, decision, timeout):
-        return False
+client = JevClient(timeout=10)
 
-@guard(
-    policy=Policy(risk_threshold="critical_danger", min_confidence=0.8),
-    confirmer=DenyAsk(),
-)
-def deploy():
+@guard(policy=ProductionPolicy(), client=client)
+def read_status():
     ...
 ```
 
-For a production-hardening migration, use `ProductionPolicy()` (and configure
-an evaluator) instead; its fail-closed behavior intentionally differs from the
-legacy fallback path.
-
-Do not combine `policy=` with any legacy argument: this is rejected with
-`TypeError` so that one call has one unambiguous enforcement policy. The
-`policy=` migration also applies to `guard_langchain_tool` for policy fields.
-For this release, a LangChain caller that must preserve legacy
-`interactive=False` behavior must retain that legacy argument: the LangChain
-adapter does not yet expose a confirmer hook.
+The timeout controls client-side HTTP operations, not a provider SLA. Production
+policies fail closed when the evaluator times out, so set it from observed
+provider latency and the maximum blocking time your tool execution can accept.
 
 ---
 
@@ -200,6 +191,8 @@ An action is blocked if:
 export TYPESAFE_API_KEY="ts-..."
 # Optional: pin a model version (default jev-latest)
 export JEV_MODEL="jev-1.13.0"
+# Optional: API request timeout in seconds (default 2.0)
+export JEV_TIMEOUT_SECONDS="10"
 
 # Option B: OpenRouter (OpenRouter System One endpoint — same protocol, extra id/provider/usage.cost fields)
 export JEV_BACKEND="openrouter"

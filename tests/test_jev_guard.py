@@ -20,7 +20,6 @@ from jevshield.core import (
     aenforce,
     decide,
     enforce,
-    enforce_policy,
 )
 from jevshield.exceptions import (
     EvaluatorError,
@@ -100,52 +99,19 @@ class TestPublicGuardModels(unittest.TestCase):
         self.assertEqual(context.resource_scope, ("db:prod",))
 
 
-class TestGuardCompatibility(unittest.TestCase):
-    def test_legacy_guard_arguments_warn_and_still_execute(self):
-        with self.assertWarns(DeprecationWarning):
-            @guard(risk_threshold="critical_danger", interactive=False)
-            def list_files():
-                return "ok"
-
-        self.assertEqual(list_files(), "ok")
-
-    def test_policy_and_legacy_arguments_conflict(self):
+class TestGuardPublicApi(unittest.TestCase):
+    def test_guard_requires_an_explicit_policy(self):
         with self.assertRaises(TypeError):
-            guard(policy=ProductionPolicy(), interactive=False)
+            guard()
 
-    def test_legacy_noninteractive_ask_denies_without_terminal_prompt(self):
-        client = mock.Mock()
-        client.evaluate_context.return_value = low_confidence_evaluation()
-
-        with self.assertWarns(DeprecationWarning):
-            @guard(client=client, min_confidence=0.8, interactive=False)
-            def safe_tool():
-                return "executed"
-
-        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
-            "builtins.input", side_effect=AssertionError("terminal input must not run")
-        ) as terminal_input:
-            with self.assertRaises(SecurityViolationError):
-                safe_tool()
-        terminal_input.assert_not_called()
-
-    def test_legacy_noninteractive_async_ask_denies_without_terminal_prompt(self):
-        client = mock.Mock()
-        client.aevaluate_context = mock.AsyncMock(
-            return_value=low_confidence_evaluation()
-        )
-
-        with self.assertWarns(DeprecationWarning):
-            @guard(client=client, min_confidence=0.8, interactive=False)
-            async def safe_tool():
-                return "executed"
-
-        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
-            "builtins.input", side_effect=AssertionError("terminal input must not run")
-        ) as terminal_input:
-            with self.assertRaises(SecurityViolationError):
-                asyncio.run(safe_tool())
-        terminal_input.assert_not_called()
+    def test_guard_rejects_removed_legacy_keywords(self):
+        for keyword, value in (
+            ("risk_threshold", "critical_danger"),
+            ("interactive", False),
+            ("min_confidence", 0.8),
+        ):
+            with self.subTest(keyword=keyword), self.assertRaises(TypeError):
+                guard(**{keyword: value})
 
 
 class TestStrictEvaluatorFailures(unittest.TestCase):
@@ -734,105 +700,6 @@ class TestLocalRuleShortCircuit(unittest.TestCase):
             with self.assertRaises(SecurityViolationError):
                 list_files("/var/log")
         client.evaluate_context.assert_not_called()
-
-
-class TestEnforcePolicy(unittest.TestCase):
-    def setUp(self):
-        # enforce_policy 的 headless 判定依赖 isatty；测试中统一置为 False
-        self.tty_patcher = mock.patch("sys.stdin.isatty", return_value=False)
-        self.tty_patcher.start()
-        self.addCleanup(self.tty_patcher.stop)
-
-    def test_safe_decision_passes(self):
-        enforce_policy("run", (), {}, make_decision(), interactive=False)
-
-    def test_blocked_by_tier_and_probability(self):
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy(
-                "run", (), {},
-                make_decision(risk="critical_danger", noul=0.99),
-                interactive=False
-            )
-
-    def test_high_tier_low_probability_not_blocked(self):
-        # P=0.5 不超过 0.75 线，单 tier 高不足以阻断
-        enforce_policy(
-            "run", (), {},
-            make_decision(risk="critical_danger", noul=0.5),
-            interactive=False
-        )
-
-    def test_blocked_by_blast_and_destructive(self):
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy(
-                "run", (), {},
-                make_decision(risk="medium_risk", noul=0.9, blast=3.0),
-                threshold="critical_danger",
-                interactive=False
-            )
-
-    def test_blast_alone_without_destructive_passes(self):
-        # blast 高但非 destructive（P=0.4）不触发第二条路径
-        enforce_policy(
-            "run", (), {},
-            make_decision(risk="medium_risk", noul=0.4, blast=4.0),
-            threshold="critical_danger",
-            interactive=False
-        )
-
-    def test_unknown_risk_choice_fails_closed(self):
-        decision = make_decision(risk="bogus_tier", noul=0.99)
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy("run", (), {}, decision, interactive=False)
-
-    def test_missing_risk_choice_fails_closed(self):
-        decision = make_decision(noul=0.99)
-        del decision["risk_level"]
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy("run", (), {}, decision, interactive=False)
-
-    def test_missing_blast_fails_closed(self):
-        # blast 缺失按 BLAST_MAX 处理，destructive 时触发阻断
-        decision = make_decision(risk="medium_risk", noul=0.9)
-        del decision["blast_radius"]
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy(
-                "run", (), {}, decision,
-                threshold="critical_danger", interactive=False
-            )
-
-    def test_min_confidence_blocks_low_conf_in_headless(self):
-        with self.assertRaises(SecurityViolationError) as ctx:
-            enforce_policy(
-                "run", (), {},
-                make_decision(conf=0.3),
-                interactive=False, min_confidence=0.6
-            )
-        self.assertIn("confidence", ctx.exception.reason.lower())
-
-    def test_min_confidence_missing_conf_fails_closed(self):
-        decision = make_decision()
-        del decision["risk_level"]["confidence"]
-        with self.assertRaises(SecurityViolationError):
-            enforce_policy(
-                "run", (), {}, decision,
-                interactive=False, min_confidence=0.6
-            )
-
-    def test_min_confidence_disabled_by_default(self):
-        # 默认 min_confidence=0 时低置信度不影响放行
-        enforce_policy(
-            "run", (), {},
-            make_decision(conf=0.1),
-            interactive=False
-        )
-
-    def test_min_confidence_high_conf_passes(self):
-        enforce_policy(
-            "run", (), {},
-            make_decision(conf=0.95),
-            interactive=False, min_confidence=0.6
-        )
 
 
 class TestHeuristicFallback(unittest.TestCase):
@@ -1447,6 +1314,25 @@ class TestRetryAndFallback(unittest.TestCase):
 
 
 class TestBackendResolution(unittest.TestCase):
+    def test_timeout_uses_environment_default_when_not_explicit(self):
+        with mock.patch.dict(os.environ, {"JEV_TIMEOUT_SECONDS": "7.5"}, clear=True):
+            client = JevClient(api_key="k")
+        self.assertEqual(client.timeout, 7.5)
+
+    def test_explicit_timeout_overrides_environment_default(self):
+        with mock.patch.dict(os.environ, {"JEV_TIMEOUT_SECONDS": "7.5"}, clear=True):
+            client = JevClient(api_key="k", timeout=1.25)
+        self.assertEqual(client.timeout, 1.25)
+
+    def test_invalid_timeout_environment_value_is_rejected(self):
+        with mock.patch.dict(os.environ, {"JEV_TIMEOUT_SECONDS": "zero"}, clear=True):
+            with self.assertRaises(ValueError):
+                JevClient(api_key="k")
+
+    def test_non_positive_timeout_is_rejected(self):
+        with self.assertRaises(ValueError):
+            JevClient(api_key="k", timeout=0)
+
     def test_explicit_backend_wins(self):
         with mock.patch.dict(os.environ, {"JEV_BACKEND": "openrouter"}, clear=True):
             client = JevClient(api_key="k", backend="typesafe")
@@ -1495,15 +1381,18 @@ class TestLangChainIntegration(unittest.TestCase):
     def test_wrapper_preserves_tool_identity(self):
         from jevshield import guard_langchain_tool
         tool = self._make_tool()
-        with self.assertWarns(DeprecationWarning):
-            guarded = guard_langchain_tool(tool, interactive=False)
+        guarded = guard_langchain_tool(tool, policy=ProductionPolicy())
         self.assertEqual(guarded._run.__name__, "delete_s3_bucket")
         self.assertIn("S3", guarded._run.__doc__)
 
+    def test_langchain_rejects_removed_legacy_keywords(self):
+        from jevshield import guard_langchain_tool
+        with self.assertRaises(TypeError):
+            guard_langchain_tool(self._make_tool(), interactive=False)
+
     def test_destructive_langchain_tool_blocked(self):
         from jevshield import guard_langchain_tool, SecurityViolationError
-        with self.assertWarns(DeprecationWarning):
-            guarded = guard_langchain_tool(self._make_tool(), interactive=False)
+        guarded = guard_langchain_tool(self._make_tool(), policy=ProductionPolicy())
         with self.assertRaises(SecurityViolationError):
             guarded.invoke({"bucket_name": "prod-customer-backups", "force": True})
 
@@ -1514,28 +1403,6 @@ class TestLangChainIntegration(unittest.TestCase):
         with self.assertRaises(SecurityViolationError):
             guarded.invoke({"bucket_name": "prod", "force": True})
 
-    def test_legacy_noninteractive_langchain_ask_never_prompts(self):
-        from jevshield import guard_langchain_tool
-
-        @self._tool_decorator()
-        def list_files(path: str):
-            """Lists files within a specified local filesystem directory."""
-            return f"Files at {path}: ['app.py']"
-
-        client = mock.Mock()
-        client.evaluate_context.return_value = low_confidence_evaluation()
-        with mock.patch("jevshield.decorators.get_client", return_value=client):
-            with self.assertWarns(DeprecationWarning):
-                guarded = guard_langchain_tool(
-                    list_files, interactive=False, min_confidence=0.8
-                )
-            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
-                "builtins.input", side_effect=AssertionError("terminal input must not run")
-            ) as terminal_input:
-                with self.assertRaises(SecurityViolationError):
-                    guarded.invoke({"path": "/var/log"})
-        terminal_input.assert_not_called()
-
     def test_safe_langchain_tool_passes(self):
         from jevshield import guard_langchain_tool
 
@@ -1544,8 +1411,7 @@ class TestLangChainIntegration(unittest.TestCase):
             """Lists files within a specified local filesystem directory."""
             return f"Files at {path}: ['app.py']"
 
-        with self.assertWarns(DeprecationWarning):
-            guarded = guard_langchain_tool(list_files, interactive=False)
+        guarded = guard_langchain_tool(list_files, policy=DevelopmentPolicy())
         result = guarded.invoke({"path": "/var/log"})
         self.assertIn("/var/log", result)
 

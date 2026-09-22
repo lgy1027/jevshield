@@ -36,7 +36,7 @@ These invariants are the project's core value — PRs that break them will not b
 * Keep changes focused; one concern per PR.
 * Add or update tests for behavior changes. The suite is stdlib `unittest` — no test framework dependencies, please.
 * Run `python -m unittest discover -s tests -v` before pushing; it must pass on Python 3.9+ (the CI matrix covers 3.9–3.13).
-* Treat `policy=` as the public configuration surface. Do not add examples or new call sites using the deprecated `risk_threshold`, `interactive`, or `min_confidence` keywords; do not combine either legacy keyword with `policy=`.
+* Treat `policy=` as the required public configuration surface. Do not add legacy decorator keywords such as `risk_threshold`, `interactive`, or `min_confidence`.
 * Match the existing code style: concise Chinese comments are used throughout the implementation; public API docstrings are currently Chinese and may be anglicized over time — keep whichever language the surrounding code uses.
 
 ## Commit Style

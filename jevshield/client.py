@@ -58,6 +58,22 @@ BACKENDS = {
     },
 }
 DEFAULT_BACKEND = "typesafe"
+DEFAULT_TIMEOUT_SECONDS = 2.0
+
+
+def _resolve_timeout(timeout: Optional[float]) -> float:
+    """Resolve the explicit or environment-configured request timeout."""
+
+    raw_timeout: Any = timeout
+    if raw_timeout is None:
+        raw_timeout = os.getenv("JEV_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
+    try:
+        resolved = float(raw_timeout)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Jev timeout must be a positive number of seconds.") from error
+    if not math.isfinite(resolved) or resolved <= 0.0:
+        raise ValueError("Jev timeout must be a positive finite number of seconds.")
+    return resolved
 
 
 class JevClient:
@@ -73,7 +89,7 @@ class JevClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         backend: Optional[str] = None,
-        timeout: float = 2.0
+        timeout: Optional[float] = None,
     ):
         # 后端解析：显式参数 > JEV_BACKEND 环境变量 > 自动探测
         if backend is None:
@@ -98,10 +114,10 @@ class JevClient:
         if model is None:
             model = os.getenv("JEV_MODEL") or profile["default_model"]
         self.model = model
-        self.timeout = timeout
+        self.timeout = _resolve_timeout(timeout)
         self.is_mock_mode = not bool(self.api_key)
 
-        # Persistent Connection Pool to preserve sub-100ms budget
+        # Persistent connection pooling avoids repeated TCP/TLS setup.
         self._http_client = httpx.Client(
             timeout=self.timeout,
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)

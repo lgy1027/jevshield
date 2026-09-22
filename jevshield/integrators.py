@@ -1,16 +1,13 @@
 import functools
-from typing import Any, Optional
-from .decorators import _NonInteractiveConfirmer, _resolve_policy, guard
+from typing import Any
+from .decorators import guard
 from .models import Policy
 
 
 def guard_langchain_tool(
     tool: Any,
     *,
-    policy: Optional[Policy] = None,
-    risk_threshold: Optional[str] = None,
-    interactive: Optional[bool] = None,
-    min_confidence: Optional[float] = None,
+    policy: Policy,
 ):
     """
     Patches both sync (_run) and async (_arun) invocations of a LangChain BaseTool.
@@ -21,13 +18,6 @@ def guard_langchain_tool(
     """
     original_run = tool._run
     original_arun = getattr(tool, "_arun", None)
-    policy = _resolve_policy(
-        policy,
-        risk_threshold,
-        interactive,
-        min_confidence,
-        warning_stacklevel=3,
-    )
 
     def run_impl(*args, **kwargs):
         return original_run(*args, **kwargs)
@@ -41,7 +31,6 @@ def guard_langchain_tool(
     run_impl.__doc__ = getattr(tool, "description", None)
     tool._run = guard(
         policy=policy,
-        confirmer=_NonInteractiveConfirmer() if interactive is False else None,
     )(run_impl)
 
     if original_arun is not None:
@@ -53,7 +42,6 @@ def guard_langchain_tool(
         arun_impl.__doc__ = getattr(tool, "description", None)
         tool._arun = guard(
             policy=policy,
-            confirmer=_NonInteractiveConfirmer() if interactive is False else None,
         )(arun_impl)
 
     return tool
