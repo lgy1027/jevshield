@@ -2,10 +2,15 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import json
 import os
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, Union
+from typing import Any, Iterable, Mapping, Optional, Tuple, Union
+
+from jevshield import DecisionStatus, IntentClassifier, Route, Router
+
+from .loader import EvalCase
 
 
 _SUPPORTED_SUITES = frozenset(("classify", "route", "all"))
@@ -145,3 +150,83 @@ def write_report(report: EvalReport, report_dir: Union[str, Path]) -> Path:
         encoding="utf-8",
     )
     return report_path
+
+
+def run_classify_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float = 0.0,
+) -> EvalReport:
+    """Evaluate cases through the public :class:`IntentClassifier` API."""
+    results = []
+    for case in cases:
+        intent_type, descriptions = _intent_type_for(case.candidates)
+        result = IntentClassifier(
+            intent_type, descriptions, client, min_confidence=min_confidence
+        ).classify(case.input)
+        predicted = result.value.value if result.value is not None else None
+        results.append(
+            EvalCaseResult(
+                id=case.id,
+                expected=case.expected,
+                predicted=predicted,
+                status=result.status.value,
+                confidence=result.confidence,
+                latency_ms=result.latency_ms,
+                passed=(
+                    result.status is DecisionStatus.RESOLVED
+                    and predicted == case.expected
+                ),
+            )
+        )
+    return aggregate_report("classify", model, results)
+
+
+def run_route_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float = 0.0,
+) -> EvalReport:
+    """Evaluate cases through the public :class:`Router` API."""
+    results = []
+    for case in cases:
+        routes = {
+            key: Route(description=description, target=key)
+            for key, description in case.candidates.items()
+        }
+        result = Router(routes, client, min_confidence=min_confidence).select(case.input)
+        results.append(
+            EvalCaseResult(
+                id=case.id,
+                expected=case.expected,
+                predicted=result.route_key,
+                status=result.status.value,
+                confidence=result.confidence,
+                latency_ms=result.latency_ms,
+                passed=(
+                    result.status is DecisionStatus.RESOLVED
+                    and result.route_key == case.expected
+                ),
+            )
+        )
+    return aggregate_report("route", model, results)
+
+
+def _intent_type_for(candidates: Mapping[str, str]):
+    """Create an enum and descriptions accepted by ``IntentClassifier``."""
+    intent_type = Enum(
+        "EvaluationIntent",
+        {
+            "candidate_{}".format(index): candidate
+            for index, candidate in enumerate(candidates)
+        },
+    )
+    descriptions = {
+        member: candidates[member.value]
+        for member in intent_type
+    }
+    return intent_type, descriptions

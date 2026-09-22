@@ -13,8 +13,26 @@ from evals.runner import (
     MissingCredentialError,
     aggregate_report,
     load_api_key,
+    run_classify_suite,
+    run_route_suite,
     write_report,
 )
+from jevshield import ChoiceAnswer, DecisionStatus
+
+
+class RecordingDecisionClient:
+    """Network-free DecisionClient double with scripted public answers."""
+
+    def __init__(self, answers):
+        self._answers = iter(answers)
+        self.calls = []
+
+    def choose(self, state, question):
+        self.calls.append((state, question))
+        return next(self._answers)
+
+    async def achoose(self, state, question):
+        raise AssertionError("Synchronous evaluation suites must use choose().")
 
 
 class TestEvalCaseLoader(unittest.TestCase):
@@ -175,6 +193,52 @@ class TestEvalRunnerPrimitives(unittest.TestCase):
                 write_report(report, report_dir)
 
             self.assertFalse(outside_path.exists())
+
+
+class TestPublicDecisionSuites(unittest.TestCase):
+    def test_classify_suite_uses_public_classifier_and_separates_outcomes(self):
+        """Wrong classification, uncertainty, and outages must not count as passes."""
+        case_text = "Confidential request text must never appear in reports"
+        cases = (
+            EvalCase("right", case_text, {"orders": "Order work", "human": "Review"}, "orders"),
+            EvalCase("wrong", case_text, {"orders": "Order work", "human": "Review"}, "orders"),
+            EvalCase("uncertain", case_text, {"orders": "Order work", "human": "Review"}, "orders"),
+            EvalCase("offline", case_text, {"orders": "Order work", "human": "Review"}, "orders"),
+        )
+        client = RecordingDecisionClient(
+            (
+                ChoiceAnswer("orders", 0.9, DecisionStatus.RESOLVED, 1.0, "fake"),
+                ChoiceAnswer("human", 0.8, DecisionStatus.RESOLVED, 2.0, "fake"),
+                ChoiceAnswer(None, 0.0, DecisionStatus.UNCERTAIN, 3.0, "fake"),
+                ChoiceAnswer(None, 0.0, DecisionStatus.UNAVAILABLE, 4.0, "fake"),
+            )
+        )
+
+        report = run_classify_suite(cases, client, model="fake-model")
+
+        self.assertEqual((report.total, report.passed, report.incorrect, report.uncertain, report.unavailable), (4, 1, 1, 1, 1))
+        self.assertEqual([question.name for _, question in client.calls], ["intent"] * 4)
+        self.assertTrue(all(question.criteria == {"orders": "Order work", "human": "Review"} for _, question in client.calls))
+        self.assertNotIn(case_text, json.dumps(report.to_dict(), ensure_ascii=False))
+
+    def test_route_suite_uses_public_router_and_requires_resolved_exact_match(self):
+        """Routes pass only when the public Router resolves the expected route key."""
+        cases = (
+            EvalCase("right", "Route private request", {"orders": "Order work", "human": "Review"}, "orders"),
+            EvalCase("wrong", "Route private request", {"orders": "Order work", "human": "Review"}, "orders"),
+        )
+        client = RecordingDecisionClient(
+            (
+                ChoiceAnswer("orders", 0.9, DecisionStatus.RESOLVED, 1.0, "fake"),
+                ChoiceAnswer("human", 0.9, DecisionStatus.RESOLVED, 2.0, "fake"),
+            )
+        )
+
+        report = run_route_suite(cases, client, model="fake-model")
+
+        self.assertEqual((report.total, report.passed, report.incorrect, report.uncertain, report.unavailable), (2, 1, 1, 0, 0))
+        self.assertEqual([question.name for _, question in client.calls], ["route", "route"])
+        self.assertEqual([case.predicted for case in report.cases], ["orders", "human"])
 
 
 if __name__ == "__main__":
