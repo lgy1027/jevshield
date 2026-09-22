@@ -262,7 +262,8 @@ class TestDeterministicDecisions(unittest.TestCase):
         decision = decide(self.context, evaluation, ProductionPolicy())
         with self.assertRaises(SecurityViolationError) as error:
             enforce(decision)
-        self.assertIs(error.exception.decision, decision)
+        self.assertIsNot(error.exception.decision, decision)
+        self.assertEqual(error.exception.decision, decision)
 
 
 class TestConfirmationAndAudit(unittest.TestCase):
@@ -980,6 +981,19 @@ class TestRedactionBoundary(unittest.TestCase):
         def __repr__(self):
             return TestRedactionBoundary.secret
 
+    class EqualityBypassSecret:
+        """Pretends to equal its redacted replacement while retaining a secret."""
+
+        def __str__(self):
+            return TestRedactionBoundary.secret
+
+        def __repr__(self):
+            return TestRedactionBoundary.secret
+
+        def __eq__(self, other):
+            del other
+            return True
+
     def secret_payload(self):
         return {
             self.secret: "key-value",
@@ -1069,6 +1083,43 @@ class TestRedactionBoundary(unittest.TestCase):
             audit_events[0],
             raised.exception.decision,
         ):
+            self.assert_secret_absent(safe_decision)
+            self.assert_json_safe(safe_decision.context.args)
+            self.assert_json_safe(safe_decision.redacted_arguments)
+
+    def test_adversarial_equality_cannot_restore_unredacted_decision(self):
+        raw_arguments = {"payload": self.EqualityBypassSecret()}
+        decision = GuardDecision(
+            action=Action.ASK,
+            context=GuardContext("run", "", raw_arguments, resource_scope=[]),
+            evaluation=low_confidence_evaluation(),
+            policy_name="production",
+            redacted_arguments=raw_arguments,
+        )
+        confirmations = []
+        audit_events = []
+
+        class Rejecter:
+            def confirm(self, received, timeout):
+                del timeout
+                confirmations.append(received)
+                return False
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            enforce(
+                decision,
+                confirmer=Rejecter(),
+                audit_sink=CallbackAuditSink(audit_events.append),
+            )
+
+        self.assertEqual(len(confirmations), 1)
+        self.assertEqual(len(audit_events), 1)
+        for safe_decision in (
+            confirmations[0],
+            audit_events[0],
+            raised.exception.decision,
+        ):
+            self.assertIsNot(safe_decision, decision)
             self.assert_secret_absent(safe_decision)
             self.assert_json_safe(safe_decision.context.args)
             self.assert_json_safe(safe_decision.redacted_arguments)

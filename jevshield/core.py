@@ -122,7 +122,7 @@ def _redacted_decision(decision: GuardDecision) -> GuardDecision:
         network_called=decision.network_called,
         redacted_arguments=redact_for_audit(decision.context.args),
     )
-    return decision if safe_decision == decision else safe_decision
+    return safe_decision
 
 
 def _bounded_ask_timeout(timeout: float) -> float:
