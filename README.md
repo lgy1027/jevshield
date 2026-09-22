@@ -145,8 +145,11 @@ an evaluator) instead; its fail-closed behavior intentionally differs from the
 legacy fallback path.
 
 Do not combine `policy=` with any legacy argument: this is rejected with
-`TypeError` so that one call has one unambiguous enforcement policy. The same
-migration applies to `guard_langchain_tool`.
+`TypeError` so that one call has one unambiguous enforcement policy. The
+`policy=` migration also applies to `guard_langchain_tool` for policy fields.
+For this release, a LangChain caller that must preserve legacy
+`interactive=False` behavior must retain that legacy argument: the LangChain
+adapter does not yet expose a confirmer hook.
 
 ---
 
