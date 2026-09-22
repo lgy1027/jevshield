@@ -102,10 +102,15 @@ def _redact(
             "_type": type(value).__name__,
             "text": _redact_text(bytes(value).decode("utf-8", errors="replace")),
         }
-    if value is None or isinstance(value, (bool, int)):
-        return value
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
     if isinstance(value, float):
-        return value if math.isfinite(value) else "[NON_FINITE_NUMBER]"
+        normalized_float = float(value)
+        return normalized_float if math.isfinite(normalized_float) else "[NON_FINITE_NUMBER]"
 
     active_seen = seen if seen is not None else set()
     object_id = id(value)

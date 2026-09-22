@@ -976,13 +976,17 @@ class TestRedactionBoundary(unittest.TestCase):
         def __repr__(self):
             return TestRedactionBoundary.secret
 
+    class SecretInt(int):
+        def __repr__(self):
+            return TestRedactionBoundary.secret
+
     def secret_payload(self):
         return {
-            self.secret: {
-                "bytes": self.secret.encode(),
-                "object": self.SecretObject(),
-                "nested": [{"again": self.secret.encode()}],
-            },
+            self.secret: "key-value",
+            "bytes": self.secret.encode(),
+            "object": self.SecretObject(),
+            "number": self.SecretInt(7),
+            "nested": [{"again": self.secret.encode()}],
         }
 
     def assert_secret_absent(self, value):
