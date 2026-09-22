@@ -13,7 +13,9 @@ from jevshield import DecisionStatus, IntentClassifier, Route, Router
 from .loader import EvalCase
 
 
-_SUPPORTED_SUITES = frozenset(("classify", "route", "route_high_risk", "all"))
+_SUPPORTED_SUITES = frozenset(
+    ("classify", "route", "route_high_risk", "route_security_holdout", "all")
+)
 
 
 class MissingCredentialError(RuntimeError):
@@ -54,6 +56,7 @@ class EvalReport:
     total: int
     passed: int
     incorrect: int
+    high_confidence_misses: int
     uncertain: int
     unavailable: int
     cases: Tuple[EvalCaseResult, ...]
@@ -66,6 +69,7 @@ class EvalReport:
             "total": self.total,
             "passed": self.passed,
             "incorrect": self.incorrect,
+            "high_confidence_misses": self.high_confidence_misses,
             "uncertain": self.uncertain,
             "unavailable": self.unavailable,
             "cases": [case.to_dict() for case in self.cases],
@@ -131,6 +135,13 @@ def aggregate_report(
         total=len(cases),
         passed=sum(case.passed for case in cases),
         incorrect=sum(case.status == "resolved" and not case.passed for case in cases),
+        high_confidence_misses=sum(
+            case.status == "resolved"
+            and not case.passed
+            and case.confidence is not None
+            and case.confidence >= 0.75
+            for case in cases
+        ),
         uncertain=sum(case.status == "uncertain" for case in cases),
         unavailable=sum(case.status == "unavailable" for case in cases),
         cases=cases,
@@ -211,6 +222,29 @@ def run_high_risk_route_suite(
             )
     return _run_router_suite(
         cases, client, model=model, min_confidence=min_confidence, suite="route_high_risk"
+    )
+
+
+def run_security_holdout_route_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float = 0.0,
+) -> EvalReport:
+    """Evaluate the frozen security holdout through the public :class:`Router` API."""
+    cases = tuple(cases)
+    for case in cases:
+        if "security_review" not in case.candidates or case.expected != "security_review":
+            raise ValueError(
+                "Holdout case {} must expect the security_review candidate.".format(case.id)
+            )
+    return _run_router_suite(
+        cases,
+        client,
+        model=model,
+        min_confidence=min_confidence,
+        suite="route_security_holdout",
     )
 
 

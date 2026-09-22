@@ -17,6 +17,7 @@ from .runner import (
     run_classify_suite,
     run_high_risk_route_suite,
     run_route_suite,
+    run_security_holdout_route_suite,
     write_report,
 )
 
@@ -40,7 +41,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Run checked-in Jev decision evaluations and write a redacted report."
     )
     parser.add_argument(
-        "--suite", choices=("classify", "route", "route_high_risk", "all"), required=True
+        "--suite",
+        choices=("classify", "route", "route_high_risk", "route_security_holdout", "all"),
+        required=True,
     )
     parser.add_argument("--report-dir", type=Path, default=_DEFAULT_REPORT_DIR)
     parser.add_argument("--min-confidence", type=_confidence, default=0.0)
@@ -53,6 +56,7 @@ def _run_suite(name: str, client: JevClient, min_confidence: float):
         "classify": run_classify_suite,
         "route": run_route_suite,
         "route_high_risk": run_high_risk_route_suite,
+        "route_security_holdout": run_security_holdout_route_suite,
     }[name]
     return runner(cases, client, model=client.model, min_confidence=min_confidence)
 
@@ -76,7 +80,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     client = JevClient(api_key=api_key)
     try:
         suite_names = (
-            ("classify", "route", "route_high_risk")
+            ("classify", "route", "route_high_risk", "route_security_holdout")
             if arguments.suite == "all"
             else (arguments.suite,)
         )
@@ -91,10 +95,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         client.close()
 
     print(
-        "total={} passed={} incorrect={} uncertain={} unavailable={}".format(
+        "total={} passed={} incorrect={} high_confidence_misses={} uncertain={} unavailable={}".format(
             report.total,
             report.passed,
             report.incorrect,
+            report.high_confidence_misses,
             report.uncertain,
             report.unavailable,
         )

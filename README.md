@@ -219,22 +219,29 @@ the absence of configured credentials.
 
 ## Manual Jev Evaluation Suites
 
-The checked-in `classify`, `route`, and `route_high_risk` corpora can be run
-manually against a configured Jev account. They are opt-in: normal unit tests
-do not make live requests. Store a local credential in the ignored project-root
-`.env` file (or set `JEV_API_KEY` in your shell), then run:
+The checked-in `classify`, `route`, `route_high_risk`, and
+`route_security_holdout` corpora can be run manually against a configured Jev
+account. They are opt-in: normal unit tests do not make live requests. Store a
+local credential in the ignored project-root `.env` file (or set `JEV_API_KEY`
+in your shell), then run:
 
 ```bash
 JEV_API_KEY="your-local-key" python -m evals.run --suite all
 ```
 
-Choose one corpus with `--suite classify`, `--suite route`, or `--suite
-route_high_risk`; optionally write the redacted JSON result somewhere else with
-`--report-dir PATH` and reject lower-confidence decisions with
-`--min-confidence FLOAT` (from 0 to 1). `route_high_risk` is a Chinese
-security-routing corpus for account compromise, credential exposure, privilege
-escalation, payment anomalies, production operations, data removal/export, and
-prompt-injection-like requests. Every case must resolve to `security_review`;
+Choose one corpus with `--suite classify`, `--suite route`, `--suite
+route_high_risk`, or `--suite route_security_holdout`; optionally write the
+redacted JSON result somewhere else with `--report-dir PATH` and reject
+lower-confidence decisions with `--min-confidence FLOAT` (from 0 to 1).
+`route_high_risk` is a Chinese security-routing corpus for account compromise,
+credential exposure, privilege escalation, payment anomalies, production
+operations, data removal/export, and prompt-injection-like requests. Every case
+must resolve to `security_review`.
+`route_security_holdout` is a separate frozen Chinese holdout with indirect
+signals, untrusted-observation injection attempts, multi-turn goal drift, and
+ordinary-looking adjacent requests. Do not tune route candidate descriptions
+against holdout results. Both security corpora fail a resolved selection that is
+not `security_review` and reject cases missing that candidate.
 ordinary `human` handling is deliberately a distinct, failing outcome. For
 example:
 
@@ -243,14 +250,19 @@ python -m evals.run --suite classify --report-dir ./local-eval-reports --min-con
 
 # Run the security-only routing corpus.
 python -m evals.run --suite route_high_risk
+
+# Run the separate frozen security holdout.
+python -m evals.run --suite route_security_holdout
 ```
 
-The command prints aggregate outcome counts and the report path only. Reports
-contain case IDs and decision metrics, never inputs, candidate descriptions,
-gateway output, or credentials; keep their destination private as a sensible
-operational precaution. It exits nonzero if a case is incorrect, uncertain, or
-unavailable. These evaluations measure behavior on a bounded checked-in corpus;
-they do not prove general safety or correctness for all prompts and workloads.
+The command prints aggregate outcome counts, including
+`high_confidence_misses` (resolved failures with confidence at least 0.75), and
+the report path only. Reports contain case IDs and decision metrics, never
+inputs, candidate descriptions, gateway output, or credentials; keep their
+destination private as a sensible operational precaution. It exits nonzero if a
+case is incorrect, uncertain, or unavailable. These evaluations measure behavior
+on a bounded checked-in corpus; they do not prove general safety or correctness
+for all prompts and workloads.
 
 ---
 

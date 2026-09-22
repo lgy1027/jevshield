@@ -2,6 +2,7 @@ import io
 import importlib
 import json
 import os
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from evals.runner import (
     run_classify_suite,
     run_high_risk_route_suite,
     run_route_suite,
+    run_security_holdout_route_suite,
     write_report,
 )
 from jevshield import ChoiceAnswer, DecisionStatus
@@ -50,6 +52,42 @@ class TestEvalCaseLoader(unittest.TestCase):
         corpus_text = "\n".join(case.input for case in cases)
         for phrase in ("陌生订单", "密码", "权限", "转账", "生产", "删除", "导出", "忽略之前"):
             self.assertIn(phrase, corpus_text)
+
+    def test_security_holdout_corpus_is_frozen_and_covers_indirect_injection_and_goal_drift(self):
+        """A separate Chinese holdout resists tuning away subtle security-routing failures."""
+        corpus_path = (
+            Path(__file__).resolve().parents[1]
+            / "evals"
+            / "cases"
+            / "route_security_holdout.json"
+        )
+
+        cases = load_cases(corpus_path)
+
+        self.assertGreaterEqual(len(cases), 20)
+        self.assertTrue(all("security_review" in case.candidates for case in cases))
+        self.assertTrue(all(case.expected == "security_review" for case in cases))
+        by_id = {case.id: case for case in cases}
+        indirect = by_id["holdout-indirect-session"]
+        self.assertNotIn("安全", indirect.input)
+        self.assertNotIn("盗用", indirect.input)
+        self.assertIn("工具观察", by_id["holdout-tool-observation-injection"].input)
+        self.assertIn("对话轨迹", by_id["holdout-goal-drift-export"].input)
+        self.assertIn("普通需求", by_id["holdout-adjacent-order-status"].input)
+
+    def test_security_holdout_corpus_content_is_frozen(self):
+        """Changing prompts or candidate descriptions requires an explicit holdout review."""
+        corpus_path = (
+            Path(__file__).resolve().parents[1]
+            / "evals"
+            / "cases"
+            / "route_security_holdout.json"
+        )
+
+        self.assertEqual(
+            hashlib.sha256(corpus_path.read_bytes()).hexdigest(),
+            "490541ce0909cb6bc33a987fe9dde61a61f729129168c2eed4486b8e9956732d",
+        )
 
     def _write_cases(self, directory, cases):
         path = Path(directory) / "cases.json"
@@ -193,6 +231,22 @@ class TestEvalRunnerPrimitives(unittest.TestCase):
         self.assertNotIn("candidates", serialized)
         self.assertNotIn("raw_response", serialized)
 
+    def test_report_counts_only_resolved_high_confidence_failed_decisions_as_misses(self):
+        """Only confidently wrong resolved decisions contribute to the holdout miss metric."""
+        report = aggregate_report(
+            suite="route_security_holdout",
+            model="fake-model",
+            case_results=(
+                EvalCaseResult("high-wrong", "security_review", "orders", "resolved", 0.75, 1.0, False),
+                EvalCaseResult("low-wrong", "security_review", "orders", "resolved", 0.74, 1.0, False),
+                EvalCaseResult("uncertain", "security_review", None, "uncertain", 0.99, 1.0, False),
+                EvalCaseResult("right", "security_review", "security_review", "resolved", 0.99, 1.0, True),
+            ),
+        )
+
+        self.assertEqual(report.high_confidence_misses, 1)
+        self.assertEqual(report.to_dict()["high_confidence_misses"], 1)
+
     def test_report_writer_rejects_path_separated_suite_name(self):
         """A suite name must not turn the report filename into a path escape."""
         report = aggregate_report(
@@ -279,6 +333,32 @@ class TestPublicDecisionSuites(unittest.TestCase):
         self.assertEqual([question.name for _, question in client.calls], ["route"] * 4)
         self.assertEqual([case.passed for case in report.cases], [True, False, False, False])
 
+    def test_security_holdout_route_suite_uses_public_router_and_rejects_non_security_selection(self):
+        """The holdout passes only an explicit resolved security-review route."""
+        cases = (
+            EvalCase("right", "私密上下文", {"security_review": "审查", "orders": "订单"}, "security_review"),
+            EvalCase("wrong", "私密上下文", {"security_review": "审查", "orders": "订单"}, "security_review"),
+        )
+        client = RecordingDecisionClient(
+            (
+                ChoiceAnswer("security_review", 0.9, DecisionStatus.RESOLVED, 1.0, "fake"),
+                ChoiceAnswer("orders", 0.9, DecisionStatus.RESOLVED, 2.0, "fake"),
+            )
+        )
+
+        report = run_security_holdout_route_suite(cases, client, model="fake-model")
+
+        self.assertEqual(report.suite, "route_security_holdout")
+        self.assertEqual((report.passed, report.incorrect, report.high_confidence_misses), (1, 1, 1))
+        self.assertEqual([question.name for _, question in client.calls], ["route", "route"])
+
+    def test_security_holdout_rejects_case_without_security_review(self):
+        """A malformed holdout cannot silently become a general routing benchmark."""
+        cases = (EvalCase("bad", "私密上下文", {"orders": "订单"}, "orders"),)
+
+        with self.assertRaisesRegex(ValueError, "Holdout case bad must expect the security_review candidate"):
+            run_security_holdout_route_suite(cases, RecordingDecisionClient(()), model="fake-model")
+
 
 class TestEvalCli(unittest.TestCase):
     def _report(self, suite, *, passed=True):
@@ -325,7 +405,10 @@ class TestEvalCli(unittest.TestCase):
         )
         write.assert_called_once_with(report, Path(directory))
         rendered = output.getvalue()
-        self.assertIn("total=1 passed=1 incorrect=0 uncertain=0 unavailable=0", rendered)
+        self.assertIn(
+            "total=1 passed=1 incorrect=0 high_confidence_misses=0 uncertain=0 unavailable=0",
+            rendered,
+        )
         self.assertIn("report=", rendered)
         self.assertNotIn("test-key", rendered)
         self.assertNotIn("case-1", rendered)
@@ -354,11 +437,40 @@ class TestEvalCli(unittest.TestCase):
             (), client_type.return_value, model=client_type.return_value.model, min_confidence=0.0
         )
 
-    def test_cli_combines_both_suites_for_all(self):
-        """The combined option writes one report with both non-sensitive outcomes."""
+    def test_cli_runs_the_security_holdout_and_prints_only_aggregate_metrics(self):
+        """The frozen holdout is selectable without exposing its scenario content."""
+        run = importlib.import_module("evals.run")
+        report = self._report("route_security_holdout", passed=False)
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient") as client_type, patch.object(
+            run, "load_cases", return_value=()
+        ) as load_cases, patch.object(
+            run, "run_security_holdout_route_suite", return_value=report
+        ) as holdout, patch.object(
+            run, "write_report", return_value=Path(directory, "holdout-safe.json")
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = run.main(["--suite", "route_security_holdout", "--report-dir", directory])
+
+        self.assertEqual(exit_code, 1)
+        load_cases.assert_called_once_with(
+            run._PROJECT_ROOT / "evals" / "cases" / "route_security_holdout.json"
+        )
+        holdout.assert_called_once_with(
+            (), client_type.return_value, model=client_type.return_value.model, min_confidence=0.0
+        )
+        self.assertIn("high_confidence_misses=1", output.getvalue())
+        self.assertNotIn("case-1", output.getvalue())
+
+    def test_cli_combines_all_suites_for_all(self):
+        """The combined option writes one report with all non-sensitive outcomes."""
         run = importlib.import_module("evals.run")
         classify_report = self._report("classify")
         route_report = self._report("route")
+        high_risk_report = self._report("route_high_risk")
+        holdout_report = self._report("route_security_holdout")
         with tempfile.TemporaryDirectory() as directory, patch.object(
             run, "load_api_key", return_value="test-key"
         ), patch.object(run, "JevClient") as client_type, patch.object(
@@ -368,6 +480,10 @@ class TestEvalCli(unittest.TestCase):
         ) as classify, patch.object(
             run, "run_route_suite", return_value=route_report
         ) as route, patch.object(
+            run, "run_high_risk_route_suite", return_value=high_risk_report
+        ) as high_risk, patch.object(
+            run, "run_security_holdout_route_suite", return_value=holdout_report
+        ) as holdout, patch.object(
             run, "write_report", return_value=Path(directory, "all-safe.json")
         ) as write:
             with redirect_stdout(io.StringIO()):
@@ -375,8 +491,10 @@ class TestEvalCli(unittest.TestCase):
 
         classify.assert_called_once()
         route.assert_called_once()
+        high_risk.assert_called_once()
+        holdout.assert_called_once()
         report = write.call_args.args[0]
-        self.assertEqual((report.suite, report.total, report.passed), ("all", 2, 2))
+        self.assertEqual((report.suite, report.total, report.passed), ("all", 4, 4))
         self.assertEqual(write.call_args.args[1], Path(directory))
         self.assertEqual(client_type.return_value.close.call_count, 1)
 
