@@ -1,13 +1,16 @@
 import functools
-from typing import Any
-from .decorators import guard
+from typing import Any, Optional
+from .decorators import _resolve_policy, guard
+from .models import Policy
 
 
 def guard_langchain_tool(
     tool: Any,
-    risk_threshold: str = "critical_danger",
-    interactive: bool = True,
-    min_confidence: float = 0.0
+    *,
+    policy: Optional[Policy] = None,
+    risk_threshold: Optional[str] = None,
+    interactive: Optional[bool] = None,
+    min_confidence: Optional[float] = None,
 ):
     """
     Patches both sync (_run) and async (_arun) invocations of a LangChain BaseTool.
@@ -18,6 +21,13 @@ def guard_langchain_tool(
     """
     original_run = tool._run
     original_arun = getattr(tool, "_arun", None)
+    policy = _resolve_policy(
+        policy,
+        risk_threshold,
+        interactive,
+        min_confidence,
+        warning_stacklevel=3,
+    )
 
     def run_impl(*args, **kwargs):
         return original_run(*args, **kwargs)
@@ -30,9 +40,7 @@ def guard_langchain_tool(
     run_impl.__name__ = getattr(tool, "name", tool.__class__.__name__)
     run_impl.__doc__ = getattr(tool, "description", None)
     tool._run = guard(
-        risk_threshold=risk_threshold,
-        interactive=interactive,
-        min_confidence=min_confidence
+        policy=policy,
     )(run_impl)
 
     if original_arun is not None:
@@ -43,9 +51,7 @@ def guard_langchain_tool(
         arun_impl.__name__ = getattr(tool, "name", tool.__class__.__name__)
         arun_impl.__doc__ = getattr(tool, "description", None)
         tool._arun = guard(
-            risk_threshold=risk_threshold,
-            interactive=interactive,
-            min_confidence=min_confidence
+            policy=policy,
         )(arun_impl)
 
     return tool

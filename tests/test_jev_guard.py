@@ -80,6 +80,7 @@ def make_client(**kwargs):
 class TestPublicGuardModels(unittest.TestCase):
     def test_production_policy_defaults_to_deny_on_failures(self):
         policy = ProductionPolicy()
+        self.assertEqual(policy.on_local_rule_error.value, "deny")
         self.assertEqual(policy.on_evaluator_error.value, "deny")
         self.assertEqual(policy.on_timeout.value, "deny")
         self.assertEqual(policy.ask_timeout, 30.0)
@@ -94,6 +95,20 @@ class TestPublicGuardModels(unittest.TestCase):
         )
         self.assertEqual(context.environment, "production")
         self.assertEqual(context.resource_scope, ("db:prod",))
+
+
+class TestGuardCompatibility(unittest.TestCase):
+    def test_legacy_guard_arguments_warn_and_still_execute(self):
+        with self.assertWarns(DeprecationWarning):
+            @guard(risk_threshold="critical_danger", interactive=False)
+            def list_files():
+                return "ok"
+
+        self.assertEqual(list_files(), "ok")
+
+    def test_policy_and_legacy_arguments_conflict(self):
+        with self.assertRaises(TypeError):
+            guard(policy=ProductionPolicy(), interactive=False)
 
 
 class TestStrictEvaluatorFailures(unittest.TestCase):
@@ -1113,15 +1128,24 @@ class TestLangChainIntegration(unittest.TestCase):
     def test_wrapper_preserves_tool_identity(self):
         from jevshield import guard_langchain_tool
         tool = self._make_tool()
-        guarded = guard_langchain_tool(tool, interactive=False)
+        with self.assertWarns(DeprecationWarning):
+            guarded = guard_langchain_tool(tool, interactive=False)
         self.assertEqual(guarded._run.__name__, "delete_s3_bucket")
         self.assertIn("S3", guarded._run.__doc__)
 
     def test_destructive_langchain_tool_blocked(self):
         from jevshield import guard_langchain_tool, SecurityViolationError
-        guarded = guard_langchain_tool(self._make_tool(), interactive=False)
+        with self.assertWarns(DeprecationWarning):
+            guarded = guard_langchain_tool(self._make_tool(), interactive=False)
         with self.assertRaises(SecurityViolationError):
             guarded.invoke({"bucket_name": "prod-customer-backups", "force": True})
+
+    def test_langchain_wrapper_forwards_policy(self):
+        from jevshield import guard_langchain_tool
+
+        guarded = guard_langchain_tool(self._make_tool(), policy=ProductionPolicy())
+        with self.assertRaises(SecurityViolationError):
+            guarded.invoke({"bucket_name": "prod", "force": True})
 
     def test_safe_langchain_tool_passes(self):
         from jevshield import guard_langchain_tool
@@ -1131,7 +1155,8 @@ class TestLangChainIntegration(unittest.TestCase):
             """Lists files within a specified local filesystem directory."""
             return f"Files at {path}: ['app.py']"
 
-        guarded = guard_langchain_tool(list_files, interactive=False)
+        with self.assertWarns(DeprecationWarning):
+            guarded = guard_langchain_tool(list_files, interactive=False)
         result = guarded.invoke({"path": "/var/log"})
         self.assertIn("/var/log", result)
 
