@@ -43,9 +43,9 @@ pip install "jevshield[langchain]"
 ```python
 from jevshield import ProductionPolicy, SecurityViolationError, guard
 
-# Works immediately in heuristic mock mode without an API key!
-# Set your key to switch to the Jev neural model:
-# export JEV_API_KEY="your-typesafe-or-openrouter-key"
+# ProductionPolicy fails closed if no evaluator is configured. Set a provider
+# key before running safe operations with this production example:
+# export TYPESAFE_API_KEY="ts-..."
 
 @guard(policy=ProductionPolicy())
 def run_terminal(cmd: str):
@@ -90,7 +90,7 @@ def write_security_event(event):
     security_logger.info("guard decision", extra={
         "outcome": event.outcome,
         "tool": event.context.tool_name,
-        "args": event.redacted_arguments,
+        "redacted_args": event.redacted_arguments,
         "source": event.evaluation.source,
     })
 
@@ -112,8 +112,12 @@ also denies the call.
 ### Migrating from the legacy decorator API
 
 The `risk_threshold`, `interactive`, and `min_confidence` decorator arguments
-remain available in this release but emit `DeprecationWarning`. Move their
-behavior into a `Policy` and pass it as one value:
+remain available in this release but emit `DeprecationWarning`. Moving to a
+policy is an opportunity to harden production behavior; it is not always a
+behavior-preserving substitution. In particular, legacy `interactive=False`
+rejects every `ASK`, even with a TTY, while `ProductionPolicy()` may ask a
+terminal operator. Legacy evaluator failures use heuristic fallback, whereas
+`ProductionPolicy()` denies them.
 
 ```python
 # Before (deprecated)
@@ -121,14 +125,24 @@ behavior into a `Policy` and pass it as one value:
 def deploy():
     ...
 
-# After
-from dataclasses import replace
-from jevshield import ProductionPolicy, guard
+# Behavior-compatible replacement
+from jevshield import Policy, guard
 
-@guard(policy=replace(ProductionPolicy(), min_confidence=0.8))
+class DenyAsk:
+    def confirm(self, decision, timeout):
+        return False
+
+@guard(
+    policy=Policy(risk_threshold="critical_danger", min_confidence=0.8),
+    confirmer=DenyAsk(),
+)
 def deploy():
     ...
 ```
+
+For a production-hardening migration, use `ProductionPolicy()` (and configure
+an evaluator) instead; its fail-closed behavior intentionally differs from the
+legacy fallback path.
 
 Do not combine `policy=` with any legacy argument: this is rejected with
 `TypeError` so that one call has one unambiguous enforcement policy. The same
@@ -201,7 +215,10 @@ Backend resolution order: `JevClient(backend=...)` argument > `JEV_BACKEND` env 
 > ⚠️ Vercel AI Gateway (experimental `evaluate` interface; Noul is called Boolean there) and Cloudflare
 > Workers AI (`env.AI.run('typesafe/jev')`) use different request/response shapes and are not adapted yet.
 
-If neither key is present, `jevshield` automatically runs in **Deterministic Heuristic Fallback Mode**, ensuring test suites and Docker builds never crash on initialization.
+If neither key is present, development and staging policies run in
+**Deterministic Heuristic Fallback Mode**, which is useful for test suites and
+Docker builds. `ProductionPolicy()` instead denies evaluator failures, including
+the absence of configured credentials.
 
 ---
 
