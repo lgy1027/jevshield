@@ -2,6 +2,7 @@ from .decorators import guard
 from .exceptions import JevGuardError, SecurityViolationError
 from .client import JevClient
 from .classify import IntentClassifier, IntentResult
+from .route import Route, RouteSelection, Router
 from .integrators import guard_langchain_tool
 from .loop import LoopAction, LoopDecision, LoopPolicy, LoopStep, LoopTerminator
 from .models import (
@@ -34,6 +35,9 @@ __all__ = [
     "LoopTerminator",
     "Policy",
     "ProductionPolicy",
+    "Route",
+    "RouteSelection",
+    "Router",
     "SecurityViolationError",
     "StagingPolicy",
     "guard",
