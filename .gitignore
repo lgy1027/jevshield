@@ -36,6 +36,9 @@ htmlcov/
 .env
 *.local
 
+# Local Jev evaluation artifacts
+evals/reports/
+
 # AI assistant working files / local assets（保留在本地，不进版本库）
 CLAUDE.md
 /3d0a064c-*.png

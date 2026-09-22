@@ -349,5 +349,12 @@ class TestEvalCli(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
 
 
+class TestEvalReportPrivacyPolicy(unittest.TestCase):
+    def test_local_eval_report_directory_is_gitignored(self):
+        """Generated local evaluation reports must not be staged accidentally."""
+        gitignore = Path(__file__).resolve().parents[1] / ".gitignore"
+        self.assertIn("evals/reports/", gitignore.read_text(encoding="utf-8").splitlines())
+
+
 if __name__ == "__main__":
     unittest.main()
