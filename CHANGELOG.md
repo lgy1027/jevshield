@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+* Policy-based guard configuration with `DevelopmentPolicy`, `StagingPolicy`, and fail-closed `ProductionPolicy` defaults.
+* Fast-Deny local rules, structurally framed evaluator context, pre-evaluation and audit redaction, bounded confirmation, and redacted audit hooks.
+
+### Changed
+
+* `ProductionPolicy` now denies evaluator timeouts, malformed responses, transport failures, and local-rule failures rather than falling back to an evaluator heuristic.
+* Headless `ASK` decisions without an explicit confirmer, approval timeouts, and confirmation failures now deny deterministically.
+* `risk_threshold`, `interactive`, and `min_confidence` on `guard` and `guard_langchain_tool` are deprecated in favor of `policy=`; mixed legacy and policy configuration is rejected.
+
 ## [0.1.1] - 2026-09-20
 
 ### Fixed

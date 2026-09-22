@@ -41,14 +41,13 @@ pip install "jevshield[langchain]"
 ### 2. Basic Decorator Usage (Sync & Async)
 
 ```python
-import os
-from jevshield import guard, SecurityViolationError
+from jevshield import ProductionPolicy, SecurityViolationError, guard
 
 # Works immediately in heuristic mock mode without an API key!
 # Set your key to switch to the Jev neural model:
 # export JEV_API_KEY="your-typesafe-or-openrouter-key"
 
-@guard(risk_threshold="critical_danger", interactive=True)
+@guard(policy=ProductionPolicy())
 def run_terminal(cmd: str):
     """Executes arbitrary bash commands on the local machine."""
     print(f"Executing: {cmd}")
@@ -64,18 +63,93 @@ except SecurityViolationError as e:
     print(f"Blocked: {e.reason}")
 ```
 
+`ProductionPolicy()` is the recommended default whenever a guarded function can
+affect a real environment. It fails closed: an evaluator timeout, malformed
+response, transport failure, or local-rule failure becomes a denial before the
+wrapped function is invoked. Development and staging policies retain heuristic
+fallback behavior for local iteration; do not use them as a production
+availability workaround.
+
+### Audit hooks and approval
+
+Pass an `audit_sink` to receive exactly one terminal event for every guarded
+call. The event's context and `redacted_arguments` are audit-safe: recognized
+credentials are replaced before the event reaches your sink.
+
+```python
+import logging
+
+from jevshield import ProductionPolicy, guard
+from jevshield.audit import CallbackAuditSink
+
+security_logger = logging.getLogger("security")
+
+def write_security_event(event):
+    # event.outcome is allow, deny, ask-approval, or ask-rejection.
+    # Never rebuild an audit record from the original function arguments here.
+    security_logger.info("guard decision", extra={
+        "outcome": event.outcome,
+        "tool": event.context.tool_name,
+        "args": event.redacted_arguments,
+        "source": event.evaluation.source,
+    })
+
+@guard(
+    policy=ProductionPolicy(),
+    audit_sink=CallbackAuditSink(write_security_event),
+)
+def rotate_key(service: str):
+    ...
+```
+
+When a policy produces `ASK` (for example, a low-confidence result), JevShield
+uses an interactive terminal confirmer only when a TTY is available. In a
+headless worker, container, CI job, or Kubernetes pod, an `ASK` without an
+explicit confirmer is denied immediately. An explicit confirmer is bounded by
+`policy.ask_timeout` (at most 30 seconds); timeout, failure, or a non-approval
+also denies the call.
+
+### Migrating from the legacy decorator API
+
+The `risk_threshold`, `interactive`, and `min_confidence` decorator arguments
+remain available in this release but emit `DeprecationWarning`. Move their
+behavior into a `Policy` and pass it as one value:
+
+```python
+# Before (deprecated)
+@guard(risk_threshold="critical_danger", interactive=False, min_confidence=0.8)
+def deploy():
+    ...
+
+# After
+from dataclasses import replace
+from jevshield import ProductionPolicy, guard
+
+@guard(policy=replace(ProductionPolicy(), min_confidence=0.8))
+def deploy():
+    ...
+```
+
+Do not combine `policy=` with any legacy argument: this is rejected with
+`TypeError` so that one call has one unambiguous enforcement policy. The same
+migration applies to `guard_langchain_tool`.
+
 ---
 
 ## Security Posture
 
-* **Prompt-Injection Framing**: tool docstrings and arguments are wrapped in an explicit *data, not instructions* preamble before being sent for evaluation, mitigating Jev-1.13's known susceptibility to hostile content embedded in `state`.
-* **Fail-Closed Parsing**: unknown risk tiers, missing risk choices, and missing blast-radius scores are all treated as worst-case rather than silently passing.
-* **Calibrated-Confidence Routing**: set `min_confidence` on `@guard` to escalate any evaluation the model is unsure about (or that lacks a confidence field) to operator confirmation instead of trusting a low-confidence "safe" verdict.
-* **Rate-Limit Retry**: `429` / `529` responses are retried once with backoff before falling back to the local heuristic engine, so transient gateway throttling does not silently downgrade evaluation quality.
+* **Prompt-Injection Framing**: tool docstrings and arguments are structurally enclosed as passive data before evaluation; untrusted content is not presented as instructions.
+* **Two-tier redaction**: secrets are removed before an evaluator request and audit-bound data receives a second redaction pass. Original arguments are never placed on decisions, exceptions, or audit events.
+* **Fast-Deny local rules**: obvious destructive and sensitive-data-exfiltration commands are denied locally without evaluator network I/O. There is intentionally no local Fast-Pass path.
+* **Production fail-closed behavior**: `ProductionPolicy()` denies evaluator timeouts, malformed responses, transport errors, and local-rule failures. Unknown risk tiers and missing blast-radius scores are also never allowed through.
+* **Bounded approval**: a low-confidence result can become `ASK`, but a headless process without a confirmer, an approval timeout, or an approval failure always denies.
 
 ```python
-# Low-confidence evaluations are routed to the operator even when not blocked
-@guard(risk_threshold="critical_danger", interactive=True, min_confidence=0.6)
+from dataclasses import replace
+from jevshield import ProductionPolicy, guard
+
+# Low-confidence evaluations are routed to the configured operator confirmer.
+@guard(policy=replace(ProductionPolicy(), min_confidence=0.6))
 def run_terminal(cmd: str):
     ...
 ```
@@ -135,7 +209,7 @@ If neither key is present, `jevshield` automatically runs in **Deterministic Heu
 
 ```python
 from langchain_core.tools import tool
-from jevshield import guard_langchain_tool
+from jevshield import ProductionPolicy, guard_langchain_tool
 
 @tool
 def format_volume(device: str):
@@ -143,7 +217,7 @@ def format_volume(device: str):
     return f"Formatted {device}"
 
 # Automatically patches both sync (_run) and async (_arun) paths
-guarded_format = guard_langchain_tool(format_volume, interactive=False)
+guarded_format = guard_langchain_tool(format_volume, policy=ProductionPolicy())
 ```
 
 ---
