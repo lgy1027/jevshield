@@ -59,7 +59,9 @@ class Router(Generic[TTarget]):
             or not 0.0 <= min_confidence <= 1.0
         ):
             raise ValueError("min_confidence must be a finite number from 0 to 1.")
-        if fallback_key is not None and fallback_key not in routes_copy:
+        if fallback_key is not None and (
+            not isinstance(fallback_key, str) or fallback_key not in routes_copy
+        ):
             raise ValueError("fallback_key must identify a registered route.")
 
         self._routes = MappingProxyType(routes_copy)

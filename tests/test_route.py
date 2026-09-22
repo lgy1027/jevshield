@@ -57,3 +57,11 @@ class TestRouter(unittest.TestCase):
         router = Router(self._routes(calls), StubClient(ChoiceAnswer("human", 0.94, DecisionStatus.RESOLVED, 2.0, "jev")))
         selection = asyncio.run(router.aselect("I need help"))
         self.assertEqual(selection.route_key, "human")
+
+    def test_rejects_unhashable_non_string_fallback_key(self):
+        with self.assertRaises(ValueError):
+            Router(
+                self._routes([]),
+                StubClient(ChoiceAnswer("orders", 0.94, DecisionStatus.RESOLVED, 2.0, "jev")),
+                fallback_key=[],
+            )
