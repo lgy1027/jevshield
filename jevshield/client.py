@@ -298,10 +298,17 @@ class JevClient:
                 (time.perf_counter() - started) * 1000.0, "http_error",
                 "HTTP {}".format(response.status_code),
             )
-        return self._parse_choice_answer(
-            self._extract_answers(response.json()), question,
-            (time.perf_counter() - started) * 1000.0,
-        )
+        try:
+            return self._parse_choice_answer(
+                self._extract_answers(response.json()), question,
+                (time.perf_counter() - started) * 1000.0,
+            )
+        except Exception as error:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "invalid_response",
+                type(error).__name__,
+            )
 
     def evaluate_context(
         self, context: GuardContext, policy: Policy
@@ -412,10 +419,17 @@ class JevClient:
                 (time.perf_counter() - started) * 1000.0, "http_error",
                 "HTTP {}".format(response.status_code),
             )
-        return self._parse_choice_answer(
-            self._extract_answers(response.json()), question,
-            (time.perf_counter() - started) * 1000.0,
-        )
+        try:
+            return self._parse_choice_answer(
+                self._extract_answers(response.json()), question,
+                (time.perf_counter() - started) * 1000.0,
+            )
+        except Exception as error:
+            return ChoiceAnswer(
+                None, 0.0, DecisionStatus.UNAVAILABLE,
+                (time.perf_counter() - started) * 1000.0, "invalid_response",
+                type(error).__name__,
+            )
 
     async def aevaluate_context(
         self, context: GuardContext, policy: Policy

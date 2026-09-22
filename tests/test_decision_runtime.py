@@ -106,6 +106,17 @@ class TestJevChoiceExecution(unittest.TestCase):
         self.assertEqual(answer.status, DecisionStatus.UNAVAILABLE)
         self.assertEqual(answer.source, "timeout")
 
+    def test_choose_returns_unavailable_when_response_json_is_malformed(self):
+        client = self._client()
+        response = mock.Mock(status_code=200)
+        response.json.side_effect = ValueError("invalid JSON")
+        client._http_client.post.return_value = response
+
+        answer = client.choose("passive request", self._question())
+
+        self.assertEqual(answer.status, DecisionStatus.UNAVAILABLE)
+        self.assertEqual(answer.source, "invalid_response")
+
     def test_achoose_has_the_same_resolved_result(self):
         client = JevClient(api_key="test-key", backend="typesafe")
         client.is_mock_mode = False
@@ -118,3 +129,16 @@ class TestJevChoiceExecution(unittest.TestCase):
 
         self.assertEqual(answer.status, DecisionStatus.RESOLVED)
         self.assertEqual(answer.value, "knowledge")
+
+    def test_achoose_returns_unavailable_when_response_json_is_malformed(self):
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        response = mock.Mock(status_code=200)
+        response.json.side_effect = ValueError("invalid JSON")
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=response)
+
+        answer = asyncio.run(client.achoose("passive request", self._question()))
+
+        self.assertEqual(answer.status, DecisionStatus.UNAVAILABLE)
+        self.assertEqual(answer.source, "invalid_response")
