@@ -1,6 +1,6 @@
 import functools
 from typing import Any, Optional
-from .decorators import _resolve_policy, guard
+from .decorators import _NonInteractiveConfirmer, _resolve_policy, guard
 from .models import Policy
 
 
@@ -41,6 +41,7 @@ def guard_langchain_tool(
     run_impl.__doc__ = getattr(tool, "description", None)
     tool._run = guard(
         policy=policy,
+        confirmer=_NonInteractiveConfirmer() if interactive is False else None,
     )(run_impl)
 
     if original_arun is not None:
@@ -52,6 +53,7 @@ def guard_langchain_tool(
         arun_impl.__doc__ = getattr(tool, "description", None)
         tool._arun = guard(
             policy=policy,
+            confirmer=_NonInteractiveConfirmer() if interactive is False else None,
         )(arun_impl)
 
     return tool

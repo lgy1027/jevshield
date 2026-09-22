@@ -11,6 +11,14 @@ from .rules import LocalRuleEngine, RuleOutcome, RuleResult
 
 _global_client: Optional[JevClient] = None
 
+
+class _NonInteractiveConfirmer:
+    """Fail closed for the deprecated ``interactive=False`` compatibility path."""
+
+    def confirm(self, decision, timeout: float) -> bool:
+        return False
+
+
 def get_client() -> JevClient:
     global _global_client
     if _global_client is None:
@@ -72,9 +80,11 @@ def guard(
     :param min_confidence: 模型校准置信度下限；低于该值（或缺失）时即使未命中阻断
         条件也升级为人工确认，0 表示关闭（默认）
     """
+    legacy_noninteractive = interactive is False
     policy = _resolve_policy(
         policy, risk_threshold, interactive, min_confidence, warning_stacklevel=3
     )
+    effective_confirmer = _NonInteractiveConfirmer() if legacy_noninteractive else confirmer
 
     def decorator(func: Callable):
         tool_name = func.__name__
@@ -120,7 +130,7 @@ def guard(
             decision = decide(context, evaluation, policy)
             enforce(
                 decision,
-                confirmer=confirmer,
+                confirmer=effective_confirmer,
                 audit_sink=audit_sink,
                 ask_timeout=policy.ask_timeout,
             )
@@ -129,7 +139,7 @@ def guard(
             decision = decide(context, evaluation, policy)
             await aenforce(
                 decision,
-                confirmer=confirmer,
+                confirmer=effective_confirmer,
                 audit_sink=audit_sink,
                 ask_timeout=policy.ask_timeout,
             )

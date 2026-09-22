@@ -110,6 +110,40 @@ class TestGuardCompatibility(unittest.TestCase):
         with self.assertRaises(TypeError):
             guard(policy=ProductionPolicy(), interactive=False)
 
+    def test_legacy_noninteractive_ask_denies_without_terminal_prompt(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = low_confidence_evaluation()
+
+        with self.assertWarns(DeprecationWarning):
+            @guard(client=client, min_confidence=0.8, interactive=False)
+            def safe_tool():
+                return "executed"
+
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "builtins.input", side_effect=AssertionError("terminal input must not run")
+        ) as terminal_input:
+            with self.assertRaises(SecurityViolationError):
+                safe_tool()
+        terminal_input.assert_not_called()
+
+    def test_legacy_noninteractive_async_ask_denies_without_terminal_prompt(self):
+        client = mock.Mock()
+        client.aevaluate_context = mock.AsyncMock(
+            return_value=low_confidence_evaluation()
+        )
+
+        with self.assertWarns(DeprecationWarning):
+            @guard(client=client, min_confidence=0.8, interactive=False)
+            async def safe_tool():
+                return "executed"
+
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "builtins.input", side_effect=AssertionError("terminal input must not run")
+        ) as terminal_input:
+            with self.assertRaises(SecurityViolationError):
+                asyncio.run(safe_tool())
+        terminal_input.assert_not_called()
+
 
 class TestStrictEvaluatorFailures(unittest.TestCase):
     def test_production_policy_denies_when_gateway_raises(self):
@@ -1146,6 +1180,28 @@ class TestLangChainIntegration(unittest.TestCase):
         guarded = guard_langchain_tool(self._make_tool(), policy=ProductionPolicy())
         with self.assertRaises(SecurityViolationError):
             guarded.invoke({"bucket_name": "prod", "force": True})
+
+    def test_legacy_noninteractive_langchain_ask_never_prompts(self):
+        from jevshield import guard_langchain_tool
+
+        @self._tool_decorator()
+        def list_files(path: str):
+            """Lists files within a specified local filesystem directory."""
+            return f"Files at {path}: ['app.py']"
+
+        client = mock.Mock()
+        client.evaluate_context.return_value = low_confidence_evaluation()
+        with mock.patch("jevshield.decorators.get_client", return_value=client):
+            with self.assertWarns(DeprecationWarning):
+                guarded = guard_langchain_tool(
+                    list_files, interactive=False, min_confidence=0.8
+                )
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "builtins.input", side_effect=AssertionError("terminal input must not run")
+            ) as terminal_input:
+                with self.assertRaises(SecurityViolationError):
+                    guarded.invoke({"path": "/var/log"})
+        terminal_input.assert_not_called()
 
     def test_safe_langchain_tool_passes(self):
         from jevshield import guard_langchain_tool
