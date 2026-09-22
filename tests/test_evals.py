@@ -160,6 +160,22 @@ class TestEvalRunnerPrimitives(unittest.TestCase):
         self.assertNotIn("candidates", serialized)
         self.assertNotIn("raw_response", serialized)
 
+    def test_report_writer_rejects_path_separated_suite_name(self):
+        """A suite name must not turn the report filename into a path escape."""
+        report = aggregate_report(
+            suite="../outside/report",
+            model="jev-latest",
+            case_results=(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory, "reports")
+            outside_path = Path(directory, "outside", "report.json")
+
+            with self.assertRaisesRegex(ValueError, "Unsupported suite"):
+                write_report(report, report_dir)
+
+            self.assertFalse(outside_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

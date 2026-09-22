@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
 
 
+_SUPPORTED_SUITES = frozenset(("classify", "route", "all"))
+
+
 class MissingCredentialError(RuntimeError):
     """Raised when a local evaluation has no Jev credential available."""
 
@@ -131,6 +134,8 @@ def aggregate_report(
 
 def write_report(report: EvalReport, report_dir: Union[str, Path]) -> Path:
     """Write one timestamped, redacted JSON report and return its path."""
+    if report.suite not in _SUPPORTED_SUITES:
+        raise ValueError("Unsupported suite: {}".format(report.suite))
     destination = Path(report_dir)
     destination.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
