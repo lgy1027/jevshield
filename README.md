@@ -233,6 +233,37 @@ def format_volume(device: str):
 guarded_format = guard_langchain_tool(format_volume, policy=ProductionPolicy())
 ```
 
+## Local Agent Loop Termination
+
+`LoopTerminator` is an optional, framework-independent local control for
+stopping retry loops. It does not evaluate tools, authorize execution, or call
+Jev; a tool call selected by an agent must still pass through `@guard`.
+
+```python
+from jevshield import LoopAction, LoopPolicy, LoopStep, LoopTerminator
+
+terminator = LoopTerminator(LoopPolicy(
+    max_iterations=12,
+    max_repeated_tool_calls=3,
+    max_stagnant_iterations=3,
+))
+
+# Call after each completed agent iteration. Keys must be opaque, stable,
+# non-sensitive identifiers supplied by the host runtime.
+decision = terminator.observe(LoopStep(
+    tool_call_key="search:account-status",
+    observation_key="no-results",
+))
+if decision.action != LoopAction.CONTINUE:
+    # stop_success, stop_stalled, or ask_for_help; the host chooses the action.
+    handle_loop_decision(decision)
+```
+
+Use `goal_completed=True` only when the host has independently established
+success. `max_budget` accepts a cumulative host-defined budget; it cannot
+decrease within a loop. Set `stall_action=LoopAction.ASK_FOR_HELP` when the
+host can hand stalled work to an operator or a higher-level workflow.
+
 ---
 
 ## License
