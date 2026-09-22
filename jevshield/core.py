@@ -3,6 +3,7 @@ import inspect
 import queue
 import sys
 import threading
+import time
 from typing import Any, Dict, Optional, Protocol, Tuple, Union
 
 from .audit import AuditEvent, AuditSink, NullAuditSink
@@ -56,6 +57,7 @@ class CLIConfirmer:
         bounded_timeout = _bounded_ask_timeout(timeout)
         if bounded_timeout <= 0.0:
             return False
+        deadline = time.monotonic() + bounded_timeout
         result_queue = queue.Queue(maxsize=1)
 
         def read_choice() -> None:
@@ -67,13 +69,17 @@ class CLIConfirmer:
                 approved = choice.strip().lower() == "y"
             except BaseException:
                 approved = False
-            result_queue.put(approved)
+            result_queue.put((approved, time.monotonic()))
 
         threading.Thread(target=read_choice, daemon=True).start()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return False
         try:
-            return result_queue.get(timeout=bounded_timeout)
+            approved, completed_at = result_queue.get(timeout=remaining)
         except queue.Empty:
             return False
+        return approved is True and completed_at < deadline
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -127,6 +133,18 @@ def _bounded_ask_timeout(timeout: float) -> float:
     return min(MAX_ASK_TIMEOUT, max(0.0, value))
 
 
+def _stdin_is_interactive() -> bool:
+    """Return whether stdin can safely support an interactive confirmation."""
+
+    stdin = sys.stdin
+    if stdin is None:
+        return False
+    try:
+        return bool(stdin.isatty())
+    except Exception:
+        return False
+
+
 def _audit(
     audit_sink: Optional[AuditSink], outcome: str, decision: GuardDecision
 ) -> None:
@@ -168,20 +186,27 @@ def _run_confirmer(
     if timeout <= 0.0:
         return "timeout", False
     result_queue = queue.Queue(maxsize=1)
+    deadline = time.monotonic() + timeout
 
     def invoke() -> None:
         try:
             result = confirmer.confirm(decision, timeout)
         except Exception:
-            result_queue.put(("error", False))
+            result_queue.put(("error", False, time.monotonic()))
         else:
-            result_queue.put(("result", result is True))
+            result_queue.put(("result", result is True, time.monotonic()))
 
     threading.Thread(target=invoke, daemon=True).start()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.0:
+        return "timeout", False
     try:
-        return result_queue.get(timeout=timeout)
+        state, approved, completed_at = result_queue.get(timeout=remaining)
     except queue.Empty:
         return "timeout", False
+    if completed_at >= deadline:
+        return "timeout", False
+    return state, approved
 
 
 def _consume_task_result(task: "asyncio.Task[Any]") -> None:
@@ -324,7 +349,7 @@ def enforce(
         )
 
     active_confirmer = confirmer
-    if active_confirmer is None and sys.stdin.isatty():
+    if active_confirmer is None and _stdin_is_interactive():
         active_confirmer = CLIConfirmer()
     if active_confirmer is None:
         raise _denial(
@@ -369,7 +394,7 @@ async def aenforce(
         )
 
     active_confirmer = confirmer
-    if active_confirmer is None and sys.stdin.isatty():
+    if active_confirmer is None and _stdin_is_interactive():
         active_confirmer = CLIConfirmer()
     if active_confirmer is None:
         raise _denial(
