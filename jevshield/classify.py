@@ -50,7 +50,17 @@ class IntentClassifier(Generic[TIntent]):
                 raise ValueError("Intent enum values must be unique.")
             members_by_value[value] = member
 
-        if not isinstance(descriptions, Mapping) or set(descriptions) != set(members):
+        if not isinstance(descriptions, Mapping):
+            raise ValueError("Descriptions must contain exactly one entry per intent.")
+        description_keys = list(descriptions)
+        if (
+            len(description_keys) != len(members)
+            or any(type(key) is not enum_type for key in description_keys)
+            or any(
+                not any(key is member for member in members)
+                for key in description_keys
+            )
+        ):
             raise ValueError("Descriptions must contain exactly one entry per intent.")
         descriptions_copy: Dict[TIntent, str] = {}
         for member in members:

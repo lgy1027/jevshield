@@ -11,6 +11,11 @@ class Intent(str, Enum):
     MODIFY_ORDER = "modify_order"
 
 
+class ForeignIntent(str, Enum):
+    LOOK_UP_ORDER = "look_up_order"
+    MODIFY_ORDER = "modify_order"
+
+
 class StubClient:
     def __init__(self, answer):
         self.answer = answer
@@ -55,3 +60,21 @@ class TestIntentClassifier(unittest.TestCase):
         client = StubClient(ChoiceAnswer("look_up_order", 0.91, DecisionStatus.RESOLVED, 4.0, "jev"))
         result = asyncio.run(IntentClassifier(Intent, self._descriptions(), client).aclassify("Find order 1024"))
         self.assertEqual(result.value, Intent.LOOK_UP_ORDER)
+
+    def test_rejects_raw_string_description_keys(self):
+        descriptions = {
+            "look_up_order": "Read order data without changing it.",
+            "modify_order": "Change an existing order.",
+        }
+
+        with self.assertRaises(ValueError):
+            IntentClassifier(Intent, descriptions, StubClient(None))
+
+    def test_rejects_same_value_foreign_enum_description_keys(self):
+        descriptions = {
+            ForeignIntent.LOOK_UP_ORDER: "Read order data without changing it.",
+            ForeignIntent.MODIFY_ORDER: "Change an existing order.",
+        }
+
+        with self.assertRaises(ValueError):
+            IntentClassifier(Intent, descriptions, StubClient(None))
