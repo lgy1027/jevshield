@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import math
+from types import MappingProxyType
 from typing import Mapping, Optional, Protocol
 
 
@@ -25,16 +26,18 @@ class ChoiceQuestion:
             raise ValueError("Choice instructions must be a non-empty string.")
         if not isinstance(self.criteria, Mapping) or not self.criteria:
             raise ValueError("Choice criteria must be a non-empty mapping.")
+        criteria_copy = dict(self.criteria)
         if any(
             not isinstance(key, str)
             or not key.strip()
             or not isinstance(value, str)
             or not value.strip()
-            for key, value in self.criteria.items()
+            for key, value in criteria_copy.items()
         ):
             raise ValueError(
                 "Choice criteria keys and descriptions must be non-empty strings."
             )
+        object.__setattr__(self, "criteria", MappingProxyType(criteria_copy))
 
 
 @dataclass(frozen=True)

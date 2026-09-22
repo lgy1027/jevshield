@@ -6,7 +6,7 @@ from unittest import mock
 import httpx
 
 from jevshield.client import JevClient
-from jevshield.redaction import build_decision_state
+from jevshield.redaction import MAX_DECISION_STATE_CHARS, build_decision_state
 from jevshield.runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 
 
@@ -75,6 +75,16 @@ class TestRuntimeContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             ChoiceQuestion("route", "Route this request", {"": "Orders"})
 
+    def test_question_copies_and_freezes_caller_criteria(self):
+        criteria = {"orders": "Order questions."}
+        question = ChoiceQuestion("route", "Route this request", criteria)
+
+        criteria["human"] = "Requests requiring a human operator."
+
+        self.assertEqual(dict(question.criteria), {"orders": "Order questions."})
+        with self.assertRaises(TypeError):
+            question.criteria["human"] = "Requests requiring a human operator."
+
 
 class TestJevChoiceExecution(unittest.TestCase):
     def _client(self):
@@ -100,6 +110,19 @@ class TestJevChoiceExecution(unittest.TestCase):
         self.assertEqual(answer.value, "orders")
         payload = client._http_client.post.call_args.kwargs["json"]
         self.assertEqual(payload["questions"]["route"]["criteria"]["orders"], "Order questions.")
+
+    def test_choose_redacts_and_bounds_direct_state_before_sending(self):
+        client = self._client()
+        secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        client._http_client.post.return_value = FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "choice": "orders", "confidence": 0.92}
+        }})
+
+        client.choose(secret + ("x" * (MAX_DECISION_STATE_CHARS * 2)), self._question())
+
+        state = client._http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn(secret, state)
+        self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
 
     def test_choose_returns_uncertain_for_unknown_choice(self):
         client = self._client()
@@ -144,6 +167,42 @@ class TestJevChoiceExecution(unittest.TestCase):
 
         self.assertEqual(answer.status, DecisionStatus.RESOLVED)
         self.assertEqual(answer.value, "knowledge")
+
+    def test_achoose_redacts_and_bounds_direct_state_before_sending(self):
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "choice": "orders", "confidence": 0.92}
+        }}))
+
+        asyncio.run(
+            client.achoose(
+                secret + ("x" * (MAX_DECISION_STATE_CHARS * 2)), self._question()
+            )
+        )
+
+        state = client._async_http_client.post.call_args.kwargs["json"]["state"]
+        self.assertNotIn(secret, state)
+        self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
+
+    def test_achoose_validates_against_criteria_snapshot(self):
+        criteria = {"orders": "Order questions."}
+        question = ChoiceQuestion("route", "Choose the correct route.", criteria)
+        criteria["human"] = "Requests requiring a human operator."
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        client._async_http_client = mock.Mock(is_closed=False)
+        client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(200, {"answers": {
+            "route": {"type": "choice", "choice": "human", "confidence": 0.92}
+        }}))
+
+        answer = asyncio.run(client.achoose("passive request", question))
+
+        self.assertEqual(answer.status, DecisionStatus.UNCERTAIN)
+        payload_criteria = client._async_http_client.post.call_args.kwargs["json"]["questions"]["route"]["criteria"]
+        self.assertEqual(payload_criteria, {"orders": "Order questions."})
 
     def test_achoose_returns_unavailable_when_response_json_is_malformed(self):
         client = JevClient(api_key="test-key", backend="typesafe")
