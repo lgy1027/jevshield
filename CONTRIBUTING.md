@@ -24,17 +24,19 @@ python examples/01_async_and_sql.py
 
 These invariants are the project's core value — PRs that break them will not be merged:
 
-1. **`evaluate` / `aevaluate` never raise.** Every failure path (no key, non-200, empty answers, network error) degrades to `_heuristic_fallback`. The gate must never crash the agent runtime it protects.
-2. **Policy enforcement is fail-closed.** Unknown risk tiers, missing blast-radius scores, and low-confidence evaluations escalate instead of passing silently.
-3. **Sync and async paths stay in lockstep.** Any change to `evaluate` must be mirrored in `aevaluate` (and vice versa); the same applies to the two wrappers in `guard()`.
-4. **Protocol compatibility.** Response parsing keeps its backward-compatible field fallbacks (`choice`/`selected`/`value`, `noul`/`p_true`, `answers`/`results`/`questions`) unless a documented gateway release removes them.
-5. **Zero hard dependencies beyond `httpx`.** Optional integrations (e.g. LangChain) belong in extras and must degrade gracefully when not installed.
+1. **Keep the public and structured evaluation paths distinct.** Legacy `evaluate` / `aevaluate` preserve their heuristic fallback contract. `evaluate_context` / `aevaluate_context` may raise a typed evaluator error when a policy selects fail-closed behavior; the decorator must convert that error into a denial before the protected function runs.
+2. **Production must fail closed.** `ProductionPolicy()` denies evaluator timeouts, malformed responses, transport failures, and local-rule failures. Unknown risk tiers, missing blast-radius scores, a headless `ASK` without a confirmer, and failed or timed-out approval must never become an allow.
+3. **No Fast-Pass and no secret escape path.** A local rule may Fast-Deny without evaluator I/O, but it must not fast-allow. Secrets must be redacted before evaluator requests and again before decisions, exceptions, confirmers, and audit sinks; tests must assert this boundary.
+4. **Sync and async paths stay in lockstep.** Any change to `evaluate_context` must be mirrored in `aevaluate_context` (and vice versa); the same applies to the two wrappers in `guard()`.
+5. **Protocol compatibility.** Response parsing keeps its backward-compatible field fallbacks (`choice`/`selected`/`value`, `noul`/`p_true`, `answers`/`results`/`questions`) unless a documented gateway release removes them.
+6. **Zero hard dependencies beyond `httpx`.** Optional integrations (e.g. LangChain) belong in extras and must degrade gracefully when not installed.
 
 ## Pull Requests
 
 * Keep changes focused; one concern per PR.
 * Add or update tests for behavior changes. The suite is stdlib `unittest` — no test framework dependencies, please.
 * Run `python -m unittest discover -s tests -v` before pushing; it must pass on Python 3.9+ (the CI matrix covers 3.9–3.13).
+* Treat `policy=` as the required public configuration surface. Do not add legacy decorator keywords such as `risk_threshold`, `interactive`, or `min_confidence`.
 * Match the existing code style: concise Chinese comments are used throughout the implementation; public API docstrings are currently Chinese and may be anglicized over time — keep whichever language the surrounding code uses.
 
 ## Commit Style
