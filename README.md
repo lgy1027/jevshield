@@ -217,6 +217,33 @@ If neither key is present, development and staging policies run in
 Docker builds. `ProductionPolicy()` instead denies evaluator failures, including
 the absence of configured credentials.
 
+## Manual Jev Evaluation Suites
+
+The checked-in `classify` and `route` corpora can be run manually against a
+configured Jev account. They are opt-in: normal unit tests do not make live
+requests. Store a local credential in the ignored project-root `.env` file (or
+set `JEV_API_KEY` in your shell), then run:
+
+```bash
+JEV_API_KEY="your-local-key" python -m evals.run --suite all
+```
+
+Choose one corpus with `--suite classify` or `--suite route`; optionally write
+the redacted JSON result somewhere else with `--report-dir PATH` and reject
+lower-confidence decisions with `--min-confidence FLOAT` (from 0 to 1). For
+example:
+
+```bash
+python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
+```
+
+The command prints aggregate outcome counts and the report path only. Reports
+contain case IDs and decision metrics, never inputs, candidate descriptions,
+gateway output, or credentials; keep their destination private as a sensible
+operational precaution. It exits nonzero if a case is incorrect, uncertain, or
+unavailable. These evaluations measure behavior on a bounded checked-in corpus;
+they do not prove general safety or correctness for all prompts and workloads.
+
 ---
 
 ## LangChain Integration

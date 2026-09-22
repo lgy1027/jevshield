@@ -34,6 +34,12 @@ dependencies = [
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.1.0"]
 
+[tool.setuptools.packages.find]
+include = ["jevshield*", "evals*"]
+
+[tool.setuptools.package-data]
+evals = ["cases/*.json"]
+
 [project.urls]
 Homepage = "https://github.com/lgy1027/jevshield"
 Source = "https://github.com/lgy1027/jevshield"

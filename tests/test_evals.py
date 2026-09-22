@@ -1,10 +1,11 @@
 import io
+import importlib
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from evals.loader import EvalCase, load_cases
@@ -239,6 +240,113 @@ class TestPublicDecisionSuites(unittest.TestCase):
         self.assertEqual((report.total, report.passed, report.incorrect, report.uncertain, report.unavailable), (2, 1, 1, 0, 0))
         self.assertEqual([question.name for _, question in client.calls], ["route", "route"])
         self.assertEqual([case.predicted for case in report.cases], ["orders", "human"])
+
+
+class TestEvalCli(unittest.TestCase):
+    def _report(self, suite, *, passed=True):
+        return aggregate_report(
+            suite=suite,
+            model="fake-model",
+            case_results=(
+                EvalCaseResult(
+                    id="case-1",
+                    expected="orders",
+                    predicted="orders" if passed else "human",
+                    status="resolved",
+                    confidence=0.9,
+                    latency_ms=1.0,
+                    passed=passed,
+                ),
+            ),
+        )
+
+    def test_cli_runs_requested_suite_and_prints_only_aggregate_and_report_path(self):
+        """The manual command exposes metrics and a report location, not case content."""
+        run = importlib.import_module("evals.run")
+        report = self._report("classify")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient") as client_type, patch.object(
+            run, "load_cases", return_value=()
+        ), patch.object(run, "run_classify_suite", return_value=report) as classify, patch.object(
+            run, "write_report", return_value=Path(directory, "classify-safe.json")
+        ) as write:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = run.main(
+                    ["--suite", "classify", "--report-dir", directory, "--min-confidence", "0.75"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        client_type.assert_called_once_with(api_key="test-key")
+        classify.assert_called_once_with(
+            (),
+            client_type.return_value,
+            model=client_type.return_value.model,
+            min_confidence=0.75,
+        )
+        write.assert_called_once_with(report, Path(directory))
+        rendered = output.getvalue()
+        self.assertIn("total=1 passed=1 incorrect=0 uncertain=0 unavailable=0", rendered)
+        self.assertIn("report=", rendered)
+        self.assertNotIn("test-key", rendered)
+        self.assertNotIn("case-1", rendered)
+
+    def test_cli_combines_both_suites_for_all(self):
+        """The combined option writes one report with both non-sensitive outcomes."""
+        run = importlib.import_module("evals.run")
+        classify_report = self._report("classify")
+        route_report = self._report("route")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient") as client_type, patch.object(
+            run, "load_cases", return_value=()
+        ), patch.object(
+            run, "run_classify_suite", return_value=classify_report
+        ) as classify, patch.object(
+            run, "run_route_suite", return_value=route_report
+        ) as route, patch.object(
+            run, "write_report", return_value=Path(directory, "all-safe.json")
+        ) as write:
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(run.main(["--suite", "all", "--report-dir", directory]), 0)
+
+        classify.assert_called_once()
+        route.assert_called_once()
+        report = write.call_args.args[0]
+        self.assertEqual((report.suite, report.total, report.passed), ("all", 2, 2))
+        self.assertEqual(write.call_args.args[1], Path(directory))
+        self.assertEqual(client_type.return_value.close.call_count, 1)
+
+    def test_cli_returns_nonzero_when_any_result_is_incorrect(self):
+        """A completed but incorrect decision makes a live evaluation fail."""
+        run = importlib.import_module("evals.run")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient"), patch.object(
+            run, "load_cases", return_value=()
+        ), patch.object(run, "run_route_suite", return_value=self._report("route", passed=False)), patch.object(
+            run, "write_report", return_value=Path(directory, "route-safe.json")
+        ):
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(run.main(["--suite", "route", "--report-dir", directory]), 1)
+
+    def test_cli_returns_nonzero_without_a_configured_key(self):
+        """Credential validation happens before a client or suite can be run."""
+        run = importlib.import_module("evals.run")
+        with patch.object(run, "load_api_key", side_effect=MissingCredentialError("key required")), patch.object(
+            run, "JevClient"
+        ) as client_type:
+            with redirect_stderr(io.StringIO()):
+                self.assertEqual(run.main(["--suite", "all"]), 2)
+        client_type.assert_not_called()
+
+    def test_cli_rejects_an_unknown_suite(self):
+        """Only checked-in classify, route, and combined suites are accepted."""
+        run = importlib.import_module("evals.run")
+        with self.assertRaises(SystemExit) as raised, redirect_stderr(io.StringIO()):
+            run.main(["--suite", "unapproved"])
+        self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == "__main__":
