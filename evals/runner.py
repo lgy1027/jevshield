@@ -13,7 +13,7 @@ from jevshield import DecisionStatus, IntentClassifier, Route, Router
 from .loader import EvalCase
 
 
-_SUPPORTED_SUITES = frozenset(("classify", "route", "all"))
+_SUPPORTED_SUITES = frozenset(("classify", "route", "route_high_risk", "all"))
 
 
 class MissingCredentialError(RuntimeError):
@@ -192,6 +192,37 @@ def run_route_suite(
     min_confidence: float = 0.0,
 ) -> EvalReport:
     """Evaluate cases through the public :class:`Router` API."""
+    return _run_router_suite(cases, client, model=model, min_confidence=min_confidence, suite="route")
+
+
+def run_high_risk_route_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float = 0.0,
+) -> EvalReport:
+    """Evaluate security-only cases through the public :class:`Router` API."""
+    cases = tuple(cases)
+    for case in cases:
+        if "security_review" not in case.candidates or case.expected != "security_review":
+            raise ValueError(
+                "High-risk case {} must expect the security_review candidate.".format(case.id)
+            )
+    return _run_router_suite(
+        cases, client, model=model, min_confidence=min_confidence, suite="route_high_risk"
+    )
+
+
+def _run_router_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float,
+    suite: str,
+) -> EvalReport:
+    """Evaluate cases through the public :class:`Router` API for one named suite."""
     results = []
     for case in cases:
         routes = {
@@ -213,7 +244,7 @@ def run_route_suite(
                 ),
             )
         )
-    return aggregate_report("route", model, results)
+    return aggregate_report(suite, model, results)
 
 
 def _intent_type_for(candidates: Mapping[str, str]):

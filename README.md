@@ -219,22 +219,30 @@ the absence of configured credentials.
 
 ## Manual Jev Evaluation Suites
 
-The checked-in `classify` and `route` corpora can be run manually against a
-configured Jev account. They are opt-in: normal unit tests do not make live
-requests. Store a local credential in the ignored project-root `.env` file (or
-set `JEV_API_KEY` in your shell), then run:
+The checked-in `classify`, `route`, and `route_high_risk` corpora can be run
+manually against a configured Jev account. They are opt-in: normal unit tests
+do not make live requests. Store a local credential in the ignored project-root
+`.env` file (or set `JEV_API_KEY` in your shell), then run:
 
 ```bash
 JEV_API_KEY="your-local-key" python -m evals.run --suite all
 ```
 
-Choose one corpus with `--suite classify` or `--suite route`; optionally write
-the redacted JSON result somewhere else with `--report-dir PATH` and reject
-lower-confidence decisions with `--min-confidence FLOAT` (from 0 to 1). For
+Choose one corpus with `--suite classify`, `--suite route`, or `--suite
+route_high_risk`; optionally write the redacted JSON result somewhere else with
+`--report-dir PATH` and reject lower-confidence decisions with
+`--min-confidence FLOAT` (from 0 to 1). `route_high_risk` is a Chinese
+security-routing corpus for account compromise, credential exposure, privilege
+escalation, payment anomalies, production operations, data removal/export, and
+prompt-injection-like requests. Every case must resolve to `security_review`;
+ordinary `human` handling is deliberately a distinct, failing outcome. For
 example:
 
 ```bash
 python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
+
+# Run the security-only routing corpus.
+python -m evals.run --suite route_high_risk
 ```
 
 The command prints aggregate outcome counts and the report path only. Reports

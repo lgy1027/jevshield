@@ -15,6 +15,7 @@ from evals.runner import (
     aggregate_report,
     load_api_key,
     run_classify_suite,
+    run_high_risk_route_suite,
     run_route_suite,
     write_report,
 )
@@ -37,6 +38,19 @@ class RecordingDecisionClient:
 
 
 class TestEvalCaseLoader(unittest.TestCase):
+    def test_high_risk_corpus_is_checked_in_and_requires_security_review(self):
+        """Sensitive scenarios cannot be silently removed or routed to ordinary handling."""
+        corpus_path = Path(__file__).resolve().parents[1] / "evals" / "cases" / "route_high_risk.json"
+
+        cases = load_cases(corpus_path)
+
+        self.assertGreaterEqual(len(cases), 15)
+        self.assertTrue(all("security_review" in case.candidates for case in cases))
+        self.assertTrue(all(case.expected == "security_review" for case in cases))
+        corpus_text = "\n".join(case.input for case in cases)
+        for phrase in ("陌生订单", "密码", "权限", "转账", "生产", "删除", "导出", "忽略之前"):
+            self.assertIn(phrase, corpus_text)
+
     def _write_cases(self, directory, cases):
         path = Path(directory) / "cases.json"
         path.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
@@ -241,6 +255,30 @@ class TestPublicDecisionSuites(unittest.TestCase):
         self.assertEqual([question.name for _, question in client.calls], ["route", "route"])
         self.assertEqual([case.predicted for case in report.cases], ["orders", "human"])
 
+    def test_high_risk_route_suite_uses_public_router_and_rejects_every_non_security_result(self):
+        """A high-risk corpus passes only explicit public Router security-review decisions."""
+        cases = (
+            EvalCase("right", "高风险请求", {"security_review": "安全审查", "human": "人工服务"}, "security_review"),
+            EvalCase("human", "高风险请求", {"security_review": "安全审查", "human": "人工服务"}, "security_review"),
+            EvalCase("uncertain", "高风险请求", {"security_review": "安全审查", "human": "人工服务"}, "security_review"),
+            EvalCase("offline", "高风险请求", {"security_review": "安全审查", "human": "人工服务"}, "security_review"),
+        )
+        client = RecordingDecisionClient(
+            (
+                ChoiceAnswer("security_review", 0.9, DecisionStatus.RESOLVED, 1.0, "fake"),
+                ChoiceAnswer("human", 0.9, DecisionStatus.RESOLVED, 2.0, "fake"),
+                ChoiceAnswer(None, 0.0, DecisionStatus.UNCERTAIN, 3.0, "fake"),
+                ChoiceAnswer(None, 0.0, DecisionStatus.UNAVAILABLE, 4.0, "fake"),
+            )
+        )
+
+        report = run_high_risk_route_suite(cases, client, model="fake-model")
+
+        self.assertEqual(report.suite, "route_high_risk")
+        self.assertEqual((report.total, report.passed, report.incorrect, report.uncertain, report.unavailable), (4, 1, 1, 1, 1))
+        self.assertEqual([question.name for _, question in client.calls], ["route"] * 4)
+        self.assertEqual([case.passed for case in report.cases], [True, False, False, False])
+
 
 class TestEvalCli(unittest.TestCase):
     def _report(self, suite, *, passed=True):
@@ -291,6 +329,30 @@ class TestEvalCli(unittest.TestCase):
         self.assertIn("report=", rendered)
         self.assertNotIn("test-key", rendered)
         self.assertNotIn("case-1", rendered)
+
+    def test_cli_runs_the_high_risk_route_suite(self):
+        """The explicit high-risk command selects its checked-in Router evaluation."""
+        run = importlib.import_module("evals.run")
+        report = self._report("route_high_risk")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient") as client_type, patch.object(
+            run, "load_cases", return_value=()
+        ) as load_cases, patch.object(
+            run, "run_high_risk_route_suite", return_value=report
+        ) as high_risk, patch.object(
+            run, "write_report", return_value=Path(directory, "route-high-risk-safe.json")
+        ):
+            with redirect_stdout(io.StringIO()):
+                exit_code = run.main(["--suite", "route_high_risk", "--report-dir", directory])
+
+        self.assertEqual(exit_code, 0)
+        load_cases.assert_called_once_with(
+            run._PROJECT_ROOT / "evals" / "cases" / "route_high_risk.json"
+        )
+        high_risk.assert_called_once_with(
+            (), client_type.return_value, model=client_type.return_value.model, min_confidence=0.0
+        )
 
     def test_cli_combines_both_suites_for_all(self):
         """The combined option writes one report with both non-sensitive outcomes."""

@@ -15,6 +15,7 @@ from .runner import (
     aggregate_report,
     load_api_key,
     run_classify_suite,
+    run_high_risk_route_suite,
     run_route_suite,
     write_report,
 )
@@ -38,7 +39,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run checked-in Jev decision evaluations and write a redacted report."
     )
-    parser.add_argument("--suite", choices=("classify", "route", "all"), required=True)
+    parser.add_argument(
+        "--suite", choices=("classify", "route", "route_high_risk", "all"), required=True
+    )
     parser.add_argument("--report-dir", type=Path, default=_DEFAULT_REPORT_DIR)
     parser.add_argument("--min-confidence", type=_confidence, default=0.0)
     return parser
@@ -46,7 +49,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run_suite(name: str, client: JevClient, min_confidence: float):
     cases = load_cases(_PROJECT_ROOT / "evals" / "cases" / "{}.json".format(name))
-    runner = run_classify_suite if name == "classify" else run_route_suite
+    runner = {
+        "classify": run_classify_suite,
+        "route": run_route_suite,
+        "route_high_risk": run_high_risk_route_suite,
+    }[name]
     return runner(cases, client, model=client.model, min_confidence=min_confidence)
 
 
@@ -68,7 +75,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     client = JevClient(api_key=api_key)
     try:
-        suite_names = ("classify", "route") if arguments.suite == "all" else (arguments.suite,)
+        suite_names = (
+            ("classify", "route", "route_high_risk")
+            if arguments.suite == "all"
+            else (arguments.suite,)
+        )
         reports = [_run_suite(name, client, arguments.min_confidence) for name in suite_names]
         report = (
             _combined_report(reports, client.model)
