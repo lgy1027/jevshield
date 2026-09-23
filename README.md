@@ -503,6 +503,7 @@ RAG framework. Export a real credential first (the examples do not load a
 export JEV_API_KEY="your-key"
 python examples/04_live_agent_loop.py
 python examples/05_live_rag_checkpoint.py
+python examples/06_live_loop_review_eval.py
 ```
 
 `04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
@@ -511,6 +512,11 @@ derives a short evidence summary from an in-memory corpus before its evidence
 checkpoint; it never sends source documents to the reviewer. Both print only a
 typed status and action. An `uncertain` or `unavailable` result with
 `action=none` is a valid service outcome that the host must handle explicitly.
+
+`06_live_loop_review_eval.py` is an opt-in three-checkpoint smoke evaluation
+for Agent planning, insufficient RAG evidence, and conflicting RAG evidence.
+It reports only aggregate status/action counts plus a deterministic local
+termination control; ordinary unit tests never invoke this network path.
 
 ---
 

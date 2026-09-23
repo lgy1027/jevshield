@@ -32,13 +32,42 @@ class DemoClient:
         return Evaluation(risk_level="safe", confidence=1.0, source="test")
 
 
-def resolved(action):
+def resolved(action, reason="reviewed"):
     return ChoiceAnswer(
-        action, 0.9, DecisionStatus.RESOLVED, 1.0, "test", "reviewed"
+        action, 0.9, DecisionStatus.RESOLVED, 1.0, "test", reason
     )
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_live_evaluation_example_exposes_a_safe_aggregator(self):
+        path = ROOT / "examples" / "06_live_loop_review_eval.py"
+        self.assertTrue(path.is_file())
+        self.assertTrue(callable(load_example(path.name).run_live_evaluation))
+
+    def test_live_evaluation_counts_semantic_results_and_local_control(self):
+        example = load_example("06_live_loop_review_eval.py")
+        client = DemoClient(
+            resolved("ask_for_help", reason="sk-eval-reason-must-not-escape")
+        )
+
+        report = example.run_live_evaluation(client)
+
+        self.assertEqual(
+            set(report),
+            {"semantic_total", "status_counts", "action_counts", "local_action"},
+        )
+        self.assertEqual(report["semantic_total"], 3)
+        self.assertEqual(report["status_counts"], {"resolved": 3})
+        self.assertEqual(report["action_counts"], {"ask_for_help": 3})
+        self.assertEqual(report["local_action"], "stop_stalled")
+        self.assertEqual(len(client.states), 3)
+        self.assertNotIn("sk-live-example-secret", repr(report))
+        self.assertNotIn("sk-eval-reason-must-not-escape", repr(report))
+        for scenario in example.SCENARIOS:
+            self.assertNotIn(scenario[1], repr(report))
+            if scenario[4] is not None:
+                self.assertNotIn(scenario[4], repr(report))
+
     def test_agent_example_exposes_a_testable_runner(self):
         path = ROOT / "examples" / "04_live_agent_loop.py"
         self.assertTrue(path.is_file())
@@ -71,7 +100,11 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
         self.assertNotIn(example.SOURCE_DOCUMENTS[1], client.states[0])
 
     def test_examples_reject_an_unconfigured_live_client(self):
-        for filename in ("04_live_agent_loop.py", "05_live_rag_checkpoint.py"):
+        for filename in (
+            "04_live_agent_loop.py",
+            "05_live_rag_checkpoint.py",
+            "06_live_loop_review_eval.py",
+        ):
             with self.subTest(filename=filename):
                 example = load_example(filename)
                 with patch.dict(os.environ, {}, clear=True):
