@@ -492,6 +492,26 @@ if evidence_checkpoint_reached:
 `LoopReviewer` recommends loop control only. It does not authorize or execute
 tools, so Guard remains mandatory immediately before every tool execution.
 
+### Live plain-Python demonstrations
+
+The two runnable examples exercise the public APIs against a real Jev service;
+they are intentionally small application-owned flows, not a general Agent or
+RAG framework. Export a real credential first (the examples do not load a
+`.env` file automatically):
+
+```bash
+export JEV_API_KEY="your-key"
+python examples/04_live_agent_loop.py
+python examples/05_live_rag_checkpoint.py
+```
+
+`04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
+termination, then uses a semantic planning checkpoint. `05_live_rag_checkpoint.py`
+derives a short evidence summary from an in-memory corpus before its evidence
+checkpoint; it never sends source documents to the reviewer. Both print only a
+typed status and action. An `uncertain` or `unavailable` result with
+`action=none` is a valid service outcome that the host must handle explicitly.
+
 ---
 
 ## License
