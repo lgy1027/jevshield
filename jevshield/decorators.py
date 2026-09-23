@@ -20,9 +20,15 @@ def _provider_snapshot(value: Any, active_ids: set) -> Any:
     """Copy plain invocation data without invoking user-defined copy hooks."""
 
     value_type = type(value)
-    if value_type in (type(None), bool, int, float, complex, str, bytes):
+    if any(
+        value_type is allowed
+        for allowed in (type(None), bool, int, float, complex, str, bytes)
+    ):
         return value
-    if value_type not in (dict, list, tuple, set, frozenset, bytearray):
+    if not any(
+        value_type is allowed
+        for allowed in (dict, list, tuple, set, frozenset, bytearray)
+    ):
         raise TypeError("Context provider arguments must contain only plain data.")
     identity = id(value)
     if identity in active_ids:

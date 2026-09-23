@@ -893,6 +893,40 @@ class TestGuardIntentConsistency(unittest.TestCase):
         self.assertEqual(payload["command"]["value"], "list files")
         client.evaluate_context.assert_not_called()
 
+    def test_provider_rejects_type_spoofed_by_metaclass_equality(self):
+        class SpoofingType(type):
+            __hash__ = type.__hash__
+
+            def __eq__(cls, other):
+                return other is str
+
+        class MutableCommand(metaclass=SpoofingType):
+            def __init__(self):
+                self.value = "list files"
+
+        command = MutableCommand()
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        provider_calls = []
+        executions = []
+
+        def provide(args, kwargs):
+            provider_calls.append(True)
+            kwargs["command"].value = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, command):
+            executions.append(command.value)
+
+        with self.assertRaises(TypeError):
+            run(command=command)
+
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(executions, [])
+        self.assertEqual(command.value, "list files")
+        client.evaluate_context.assert_not_called()
+
     def test_local_fast_deny_runs_before_context_provider_and_intent(self):
         intent_policy, decision_client = self.intent_policy("read", "read")
         client = mock.Mock()
