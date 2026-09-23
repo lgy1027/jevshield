@@ -3,9 +3,14 @@ import inspect
 from typing import Any, Callable, Mapping, Optional, Union
 from .audit import AuditSink
 from .client import JevClient
-from .core import AsyncConfirmer, Confirmer, aenforce, decide, enforce
+from .core import AsyncConfirmer, Confirmer, _redacted_context, aenforce, decide, enforce
 from .exceptions import EvaluatorError, SecurityViolationError
-from .models import Evaluation, FailureMode, GuardContext, Policy
+from .intent import IntentAssessment, IntentPolicy, IntentStatus
+from .models import (
+    Evaluation, FailureMode, GuardContext, GuardContextMetadata, GuardDecision,
+    Policy, merge_context_metadata,
+)
+from .redaction import redact_for_audit
 from .rules import LocalRuleEngine, RuleOutcome, RuleResult
 
 _global_client: Optional[JevClient] = None
@@ -24,6 +29,8 @@ def guard(
     client: Optional[JevClient] = None,
     confirmer: Optional[Union[Confirmer, AsyncConfirmer]] = None,
     audit_sink: Optional[AuditSink] = None,
+    context_provider: Optional[Callable[[tuple, Mapping[str, Any]], GuardContextMetadata]] = None,
+    intent_policy: Optional[IntentPolicy] = None,
 ):
     """
     为任何 Python 函数或 Agent 工具注入毫秒级 Jev 门禁。
@@ -40,6 +47,31 @@ def guard(
 
         def context_for(args: tuple, kwargs: Mapping[str, Any]) -> GuardContext:
             return GuardContext(tool_name, docstring, {"args": args, "kwargs": kwargs})
+
+        def trusted_context_for(
+            context: GuardContext, args: tuple, kwargs: Mapping[str, Any]
+        ) -> GuardContext:
+            if context_provider is None:
+                return context
+            return merge_context_metadata(context, context_provider(args, kwargs))
+
+        def intent_decision(
+            context: GuardContext, assessment: IntentAssessment
+        ) -> GuardDecision:
+            sources = {
+                IntentStatus.MISMATCH: "intent_mismatch",
+                IntentStatus.UNCERTAIN: "intent_uncertain",
+                IntentStatus.UNAVAILABLE: "intent_unavailable",
+            }
+            safe_context = _redacted_context(context)
+            return GuardDecision(
+                action=assessment.action,
+                context=safe_context,
+                evaluation=Evaluation(source=sources[assessment.status]),
+                policy_name=redact_for_audit(policy.name),
+                network_called=False,
+                redacted_arguments=safe_context.args,
+            )
 
         def enforce_local_deny(context: GuardContext, result: RuleResult) -> None:
             evaluation = Evaluation(
@@ -96,6 +128,16 @@ def guard(
             async def async_wrapper(*args, **kwargs):
                 context = context_for(args, kwargs)
                 evaluate_rules(context)
+                context = trusted_context_for(context, args, kwargs)
+                if intent_policy is not None:
+                    assessment = await intent_policy.aassess(context)
+                    if assessment.action is not None:
+                        await aenforce(
+                            intent_decision(context, assessment),
+                            confirmer=effective_confirmer,
+                            audit_sink=audit_sink,
+                            ask_timeout=policy.ask_timeout,
+                        )
                 active_client = client or get_client()
 
                 try:
@@ -110,6 +152,16 @@ def guard(
         def wrapper(*args, **kwargs):
             context = context_for(args, kwargs)
             evaluate_rules(context)
+            context = trusted_context_for(context, args, kwargs)
+            if intent_policy is not None:
+                assessment = intent_policy.assess(context)
+                if assessment.action is not None:
+                    enforce(
+                        intent_decision(context, assessment),
+                        confirmer=effective_confirmer,
+                        audit_sink=audit_sink,
+                        ask_timeout=policy.ask_timeout,
+                    )
             active_client = client or get_client()
 
             try:

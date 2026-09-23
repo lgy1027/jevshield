@@ -7,12 +7,17 @@ import unittest
 from unittest import mock
 
 from jevshield.classify import IntentClassifier
+from jevshield.audit import CallbackAuditSink
 from jevshield.client import JevClient
+from jevshield.decorators import guard
+from jevshield.exceptions import SecurityViolationError
 from jevshield.intent import IntentPolicy, IntentStatus
 from jevshield.models import (
     Action,
+    Evaluation,
     GuardContext,
     GuardContextMetadata,
+    ProductionPolicy,
     merge_context_metadata,
 )
 from jevshield.redaction import (
@@ -290,3 +295,93 @@ class TestIntentPolicy(unittest.TestCase):
         self.assertEqual(assessment.status, IntentStatus.MISMATCH)
         self.assertEqual(assessment.action, Action.DENY)
         self.assertEqual(len(client.states), 2)
+
+
+class TestAsyncGuardIntentConsistency(unittest.TestCase):
+    def test_matching_intent_reaches_existing_async_evaluator(self):
+        intent_policy, decision_client = policy([answer("read"), answer("read")])
+        evaluator = mock.Mock()
+        evaluator.aevaluate_context = mock.AsyncMock(
+            return_value=Evaluation(risk_level="safe", confidence=0.9, source="jev")
+        )
+
+        @guard(policy=ProductionPolicy(), client=evaluator,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy)
+        async def read_order(order_id):
+            return order_id
+
+        self.assertEqual(asyncio.run(read_order("42")), "42")
+        self.assertEqual(len(decision_client.states), 2)
+        evaluator.aevaluate_context.assert_awaited_once()
+
+    def test_mismatch_denies_before_async_evaluator_and_function(self):
+        intent_policy, _ = policy([answer("read"), answer("delete")])
+        evaluator = mock.Mock()
+        evaluator.aevaluate_context = mock.AsyncMock(side_effect=AssertionError("evaluator called"))
+        executions = []
+        events = []
+
+        @guard(policy=ProductionPolicy(), client=evaluator,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy, audit_sink=CallbackAuditSink(events.append))
+        async def process_order(order_id):
+            executions.append(order_id)
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            asyncio.run(process_order("42"))
+
+        self.assertEqual(executions, [])
+        evaluator.aevaluate_context.assert_not_awaited()
+        self.assertEqual(raised.exception.decision.evaluation.source, "intent_mismatch")
+        self.assertEqual([event.outcome for event in events], ["deny"])
+
+    def test_unavailable_intent_denies_before_async_evaluator(self):
+        intent_policy, _ = policy([
+            answer("read"), answer(None, status=DecisionStatus.UNAVAILABLE),
+        ])
+        evaluator = mock.Mock()
+        evaluator.aevaluate_context = mock.AsyncMock(side_effect=AssertionError("evaluator called"))
+        executions = []
+
+        @guard(policy=ProductionPolicy(), client=evaluator,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy)
+        async def read_order(order_id):
+            executions.append(order_id)
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            asyncio.run(read_order("42"))
+
+        self.assertEqual(executions, [])
+        evaluator.aevaluate_context.assert_not_awaited()
+        self.assertEqual(raised.exception.decision.evaluation.source, "intent_unavailable")
+
+    def test_async_ask_rejection_audits_without_evaluator(self):
+        intent_policy, _ = policy(
+            [answer("read"), answer("delete")], on_mismatch=Action.ASK
+        )
+        evaluator = mock.Mock()
+        evaluator.aevaluate_context = mock.AsyncMock(side_effect=AssertionError("evaluator called"))
+        events = []
+
+        class Rejecter:
+            async def confirm(self, decision, timeout):
+                self.assertion = (decision.action, decision.evaluation.source, timeout)
+                return False
+
+        rejecter = Rejecter()
+
+        @guard(policy=ProductionPolicy(), client=evaluator,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy, confirmer=rejecter,
+               audit_sink=CallbackAuditSink(events.append))
+        async def process_order(order_id):
+            return order_id
+
+        with self.assertRaises(SecurityViolationError):
+            asyncio.run(process_order("42"))
+
+        self.assertEqual(rejecter.assertion[:2], (Action.ASK, "intent_mismatch"))
+        self.assertEqual([event.outcome for event in events], ["ask-rejection"])
+        evaluator.aevaluate_context.assert_not_awaited()
