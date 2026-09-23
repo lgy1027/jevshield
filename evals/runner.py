@@ -21,7 +21,7 @@ from .loader import EvalCase
 
 _SUPPORTED_SUITES = frozenset(
     ("classify", "route", "route_high_risk", "route_security_holdout",
-     "guard_intent_consistency", "all")
+     "guard_intent_consistency", "multi_agent_route", "all")
 )
 
 
@@ -297,6 +297,23 @@ def run_route_suite(
 ) -> EvalReport:
     """Evaluate cases through the public :class:`Router` API."""
     return _run_router_suite(cases, client, model=model, min_confidence=min_confidence, suite="route")
+
+
+def run_multi_agent_route_suite(
+    cases: Iterable[EvalCase],
+    client: Any,
+    *,
+    model: str,
+    min_confidence: float = 0.0,
+) -> EvalReport:
+    """Evaluate fixed-role sub-agent delegation through the public Router API."""
+    return _run_router_suite(
+        cases,
+        client,
+        model=model,
+        min_confidence=min_confidence,
+        suite="multi_agent_route",
+    )
 
 
 def run_high_risk_route_suite(
