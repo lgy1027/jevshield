@@ -6,7 +6,11 @@ from unittest import mock
 import httpx
 
 from jevshield.client import JevClient
-from jevshield.redaction import MAX_DECISION_STATE_CHARS, build_decision_state
+from jevshield.redaction import (
+    MAX_DECISION_STATE_CHARS,
+    _PreparedDecisionState,
+    build_decision_state,
+)
 from jevshield.runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 
 
@@ -124,6 +128,25 @@ class TestJevChoiceExecution(unittest.TestCase):
         self.assertNotIn(secret, state)
         self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
 
+    def test_choose_rejects_forged_or_oversized_prepared_state(self):
+        secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        candidates = (
+            _PreparedDecisionState(secret + " raw text"),
+            build_decision_state({"payload": "x" * 5000}, max_chars=6000),
+        )
+        for candidate in candidates:
+            with self.subTest(candidate_len=len(candidate)):
+                client = self._client()
+                client._http_client.post.return_value = FakeResponse(200, {"answers": {
+                    "route": {"type": "choice", "choice": "orders", "confidence": 0.92}
+                }})
+
+                client.choose(candidate, self._question())
+
+                state = client._http_client.post.call_args.kwargs["json"]["state"]
+                self.assertNotIn(secret, state)
+                self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
+
     def test_choose_returns_uncertain_for_unknown_choice(self):
         client = self._client()
         client._http_client.post.return_value = FakeResponse(200, {"answers": {
@@ -186,6 +209,27 @@ class TestJevChoiceExecution(unittest.TestCase):
         state = client._async_http_client.post.call_args.kwargs["json"]["state"]
         self.assertNotIn(secret, state)
         self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
+
+    def test_achoose_rejects_forged_or_oversized_prepared_state(self):
+        secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        candidates = (
+            _PreparedDecisionState(secret + " raw text"),
+            build_decision_state({"payload": "x" * 5000}, max_chars=6000),
+        )
+        for candidate in candidates:
+            with self.subTest(candidate_len=len(candidate)):
+                client = JevClient(api_key="test-key", backend="typesafe")
+                client.is_mock_mode = False
+                client._async_http_client = mock.Mock(is_closed=False)
+                client._async_http_client.post = mock.AsyncMock(return_value=FakeResponse(200, {"answers": {
+                    "route": {"type": "choice", "choice": "orders", "confidence": 0.92}
+                }}))
+
+                asyncio.run(client.achoose(candidate, self._question()))
+
+                state = client._async_http_client.post.call_args.kwargs["json"]["state"]
+                self.assertNotIn(secret, state)
+                self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
 
     def test_achoose_validates_against_criteria_snapshot(self):
         criteria = {"orders": "Order questions."}

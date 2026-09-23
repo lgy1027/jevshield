@@ -175,6 +175,18 @@ def build_decision_state(value: Any, max_chars: int = MAX_DECISION_STATE_CHARS) 
 
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0:
         raise ValueError("max_chars must be a positive integer.")
+    if (
+        type(value) is _PreparedDecisionState
+        and len(value) <= max_chars
+        and value.startswith(_DECISION_PREFIX)
+    ):
+        try:
+            prepared_payload = json.loads(value[len(_DECISION_PREFIX):])
+        except ValueError:
+            pass
+        else:
+            if value == build_decision_state(prepared_payload, max_chars):
+                return value
     redacted = redact_for_evaluation(value)
     serialized = json.dumps(redacted, sort_keys=True, separators=(",", ":"))
     return _PreparedDecisionState((_DECISION_PREFIX + serialized)[:max_chars])

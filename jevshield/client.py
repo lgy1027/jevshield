@@ -9,11 +9,7 @@ import httpx
 
 from .exceptions import EvaluatorError, EvaluatorTimeout, MalformedEvaluationError
 from .models import Evaluation, FailureMode, GuardContext, Policy
-from .redaction import (
-    _PreparedDecisionState,
-    build_decision_state,
-    build_evaluation_state,
-)
+from .redaction import build_decision_state, build_evaluation_state
 from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 
 try:
@@ -281,10 +277,7 @@ class JevClient:
                 None, 0.0, DecisionStatus.UNAVAILABLE, 0.0, "unconfigured",
                 "No API key is configured.",
             )
-        safe_state = (
-            state if isinstance(state, _PreparedDecisionState)
-            else build_decision_state(state)
-        )
+        safe_state = build_decision_state(state)
         started = time.perf_counter()
         try:
             response = self._post_payload(
@@ -406,10 +399,7 @@ class JevClient:
                 None, 0.0, DecisionStatus.UNAVAILABLE, 0.0, "unconfigured",
                 "No API key is configured.",
             )
-        safe_state = (
-            state if isinstance(state, _PreparedDecisionState)
-            else build_decision_state(state)
-        )
+        safe_state = build_decision_state(state)
         started = time.perf_counter()
         try:
             response = await self._apost_payload(
