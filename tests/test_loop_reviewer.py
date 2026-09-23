@@ -10,6 +10,7 @@ from jevshield.review import (
     LoopReviewer,
     LoopReviewInput,
 )
+from jevshield.loop import LoopAction, LoopPolicy, LoopStep, LoopTerminator
 from jevshield.runtime import ChoiceAnswer, DecisionStatus
 
 
@@ -229,6 +230,35 @@ class TestLoopReviewer(unittest.TestCase):
         )
 
         self.assertEqual(async_result, sync_result)
+
+
+class TestLoopReviewerComposition(unittest.TestCase):
+    def test_terminal_local_decision_skips_reviewer(self):
+        terminator = LoopTerminator(LoopPolicy(max_iterations=1))
+        client = RecordingDecisionClient([answer("continue")])
+
+        local = terminator.observe(
+            LoopStep(tool_call_key="retrieve", observation_key="same")
+        )
+        if local.action is LoopAction.CONTINUE:
+            LoopReviewer(client).review(review_input())
+
+        self.assertEqual(local.action, LoopAction.STOP_STALLED)
+        self.assertEqual(client.states, [])
+
+    def test_rag_evidence_checkpoint_can_ask_for_help(self):
+        result = LoopReviewer(
+            RecordingDecisionClient([answer("ask_for_help")])
+        ).review(
+            LoopReviewInput(
+                "Answer only from retrieved evidence.",
+                "evidence_insufficient",
+                2,
+                step_summaries=("retrieval added no support",),
+            )
+        )
+
+        self.assertEqual(result.action, LoopReviewAction.ASK_FOR_HELP)
 
 
 if __name__ == "__main__":

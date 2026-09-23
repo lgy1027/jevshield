@@ -426,6 +426,72 @@ success. `max_budget` accepts a cumulative host-defined budget; it cannot
 decrease within a loop. Set `stall_action=LoopAction.ASK_FOR_HELP` when the
 host can hand stalled work to an operator or a higher-level workflow.
 
+### Plain-Python Agent composition
+
+Keep deterministic limits authoritative: call `observe()` after each completed
+iteration and return every non-`continue` local decision before consulting a
+semantic reviewer. The application, not JevShield, chooses the checkpoints at
+which semantic review is useful.
+
+```python
+from jevshield import (
+    LoopAction,
+    LoopReviewInput,
+    LoopReviewer,
+)
+
+reviewer = LoopReviewer(decision_client, min_confidence=0.7)
+
+
+def review_agent_iteration(step, *, checkpoint=None, safe_summaries=()):
+    local = terminator.observe(step)
+    if local.action is not LoopAction.CONTINUE:
+        return local
+
+    if checkpoint is None:  # No application-selected semantic checkpoint.
+        return None
+
+    reviewed = reviewer.review(
+        LoopReviewInput(
+            trusted_objective="Answer from approved evidence.",
+            checkpoint=checkpoint,
+            iteration=local.iteration,
+            step_summaries=safe_summaries,
+        )
+    )
+    if reviewed.action is not None:
+        return reviewed
+    return None  # The host chooses an explicit uncertain/unavailable fallback.
+```
+
+### Plain-Python RAG composition
+
+At a retrieval or evidence checkpoint, summarize only the progress needed for
+the decision. Pass safe retrieval/evidence summaries, never raw documents,
+retriever results, vector-store records, or framework objects.
+
+```python
+local = terminator.observe(completed_retrieval_step)
+if local.action is not LoopAction.CONTINUE:
+    return handle_loop_decision(local)
+
+if evidence_checkpoint_reached:
+    reviewed = reviewer.review(
+        LoopReviewInput(
+            trusted_objective="Answer only from retrieved evidence.",
+            checkpoint="evidence_insufficient",
+            iteration=local.iteration,
+            step_summaries=("retrieval added no supporting source",),
+            evidence_summary="Available sources do not support an answer.",
+        )
+    )
+    if reviewed.action is not None:
+        return handle_review_action(reviewed.action)
+```
+
+`LoopReviewer` recommends loop control only. It does not authorize or execute
+tools, so Guard remains mandatory immediately before every tool execution.
+
 ---
 
 ## License
