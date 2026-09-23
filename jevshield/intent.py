@@ -54,7 +54,7 @@ class IntentPolicy(Generic[TIntent]):
             )
         expected = self.classifier.classify(context.intent)
         observed = self.classifier._classify_framed(
-            build_observed_intent_state(context)
+            build_observed_intent_state(context), observed=True
         )
         return self._assess_results(expected, observed)
 
@@ -65,7 +65,7 @@ class IntentPolicy(Generic[TIntent]):
             )
         expected = await self.classifier.aclassify(context.intent)
         observed = await self.classifier._aclassify_framed(
-            build_observed_intent_state(context)
+            build_observed_intent_state(context), observed=True
         )
         return self._assess_results(expected, observed)
 

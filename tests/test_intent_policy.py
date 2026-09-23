@@ -37,9 +37,11 @@ class RecordingDecisionClient:
     def __init__(self, answers):
         self.answers = list(answers)
         self.states = []
+        self.questions = []
 
     def choose(self, state, question):
         self.states.append(state)
+        self.questions.append(question)
         return self.answers.pop(0)
 
     async def achoose(self, state, question):
@@ -214,6 +216,16 @@ class TestIntentPolicy(unittest.TestCase):
         self.assertNotIn('"intent"', client.states[1])
         self.assertLessEqual(len(client.states[1]), MAX_DECISION_STATE_CHARS)
 
+    def test_observed_classification_uses_actual_invocation_instruction(self):
+        guard_policy, client = policy([answer("read"), answer("read")])
+
+        guard_policy.assess(context())
+
+        self.assertEqual(client.questions[0].name, "intent")
+        self.assertEqual(client.questions[1].name, "observed_intent")
+        self.assertIn("actually attempts", client.questions[1].instructions)
+        self.assertIn("arguments", client.questions[1].instructions)
+
     def test_large_observed_arguments_retain_tool_identity(self):
         trusted_objective = "trusted objective: read order 42"
         for size in (3800, 3850):
@@ -239,10 +251,10 @@ class TestIntentPolicy(unittest.TestCase):
         client.is_mock_mode = False
         client._http_client = mock.Mock(is_closed=False)
         responses = []
-        for value in ("read", "delete"):
+        for name, value in (("intent", "read"), ("observed_intent", "delete")):
             response = mock.Mock(status_code=200)
             response.json.return_value = {"answers": {
-                "intent": {"type": "choice", "choice": value, "confidence": 0.95}
+                name: {"type": "choice", "choice": value, "confidence": 0.95}
             }}
             responses.append(response)
         client._http_client.post.side_effect = responses
@@ -275,10 +287,10 @@ class TestIntentPolicy(unittest.TestCase):
         client.is_mock_mode = False
         client._http_client = mock.Mock(is_closed=False)
         responses = []
-        for value in ("read", "delete"):
+        for name, value in (("intent", "read"), ("observed_intent", "delete")):
             response = mock.Mock(status_code=200)
             response.json.return_value = {"answers": {
-                "intent": {"type": "choice", "choice": value, "confidence": 0.95}
+                name: {"type": "choice", "choice": value, "confidence": 0.95}
             }}
             responses.append(response)
         client._http_client.post.side_effect = responses

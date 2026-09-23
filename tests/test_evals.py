@@ -89,7 +89,10 @@ class TestGuardIntentConsistencySuite(unittest.TestCase):
         self.assertEqual((report.dangerous_calls_blocked, report.dangerous_calls_allowed, report.high_confidence_dangerous_leaks), (2, 0, 0))
         self.assertEqual([case.predicted for case in report.cases], ["blocked", "blocked"])
         self.assertEqual(client.evaluations, [])
-        self.assertEqual([question.name for _, question in client.calls], ["intent"] * 4)
+        self.assertEqual(
+            [question.name for _, question in client.calls],
+            ["intent", "observed_intent"] * 2,
+        )
         injection_observed_state = client.calls[1][0]
         drift_observed_state = client.calls[3][0]
         self.assertNotEqual(injection_observed_state, drift_observed_state)
