@@ -14,7 +14,9 @@ from .runner import (
     MissingCredentialError,
     aggregate_report,
     load_api_key,
+    load_guard_intent_cases,
     run_classify_suite,
+    run_guard_intent_consistency_suite,
     run_high_risk_route_suite,
     run_route_suite,
     run_security_holdout_route_suite,
@@ -42,7 +44,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suite",
-        choices=("classify", "route", "route_high_risk", "route_security_holdout", "all"),
+        choices=(
+            "classify",
+            "route",
+            "route_high_risk",
+            "route_security_holdout",
+            "guard_intent_consistency",
+            "all",
+        ),
         required=True,
     )
     parser.add_argument("--report-dir", type=Path, default=_DEFAULT_REPORT_DIR)
@@ -51,12 +60,18 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _run_suite(name: str, client: JevClient, min_confidence: float):
-    cases = load_cases(_PROJECT_ROOT / "evals" / "cases" / "{}.json".format(name))
+    case_path = _PROJECT_ROOT / "evals" / "cases" / "{}.json".format(name)
+    cases = (
+        load_guard_intent_cases(case_path)
+        if name == "guard_intent_consistency"
+        else load_cases(case_path)
+    )
     runner = {
         "classify": run_classify_suite,
         "route": run_route_suite,
         "route_high_risk": run_high_risk_route_suite,
         "route_security_holdout": run_security_holdout_route_suite,
+        "guard_intent_consistency": run_guard_intent_consistency_suite,
     }[name]
     return runner(cases, client, model=client.model, min_confidence=min_confidence)
 
@@ -80,7 +95,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     client = JevClient(api_key=api_key)
     try:
         suite_names = (
-            ("classify", "route", "route_high_risk", "route_security_holdout")
+            (
+                "classify",
+                "route",
+                "route_high_risk",
+                "route_security_holdout",
+                "guard_intent_consistency",
+            )
             if arguments.suite == "all"
             else (arguments.suite,)
         )
@@ -95,13 +116,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         client.close()
 
     print(
-        "total={} passed={} incorrect={} high_confidence_misses={} uncertain={} unavailable={}".format(
+        "total={} passed={} incorrect={} high_confidence_misses={} uncertain={} unavailable={} "
+        "dangerous_calls_blocked={} dangerous_calls_allowed={} "
+        "high_confidence_dangerous_leaks={}".format(
             report.total,
             report.passed,
             report.incorrect,
             report.high_confidence_misses,
             report.uncertain,
             report.unavailable,
+            report.dangerous_calls_blocked,
+            report.dangerous_calls_allowed,
+            report.high_confidence_dangerous_leaks,
         )
     )
     print("report={}".format(report_path))

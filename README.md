@@ -219,10 +219,11 @@ the absence of configured credentials.
 
 ## Manual Jev Evaluation Suites
 
-The checked-in `classify`, `route`, `route_high_risk`, and
-`route_security_holdout` corpora can be run manually against a configured Jev
-account. They are opt-in: normal unit tests do not make live requests. Store a
-local credential in the ignored project-root `.env` file (or set `JEV_API_KEY`
+The checked-in `classify`, `route`, `route_high_risk`,
+`route_security_holdout`, and `guard_intent_consistency` corpora can be run
+manually against a configured Jev provider. They are opt-in: normal unit tests
+use a recording decision client and never make live requests. Store a local
+credential as `JEV_API_KEY` in the ignored project-root `.env` file (or set it
 in your shell), then run:
 
 ```bash
@@ -230,9 +231,10 @@ JEV_API_KEY="your-local-key" python -m evals.run --suite all
 ```
 
 Choose one corpus with `--suite classify`, `--suite route`, `--suite
-route_high_risk`, or `--suite route_security_holdout`; optionally write the
-redacted JSON result somewhere else with `--report-dir PATH` and reject
-lower-confidence decisions with `--min-confidence FLOAT` (from 0 to 1).
+route_high_risk`, `--suite route_security_holdout`, or `--suite
+guard_intent_consistency`; optionally write the redacted JSON result somewhere
+else with `--report-dir PATH` and reject lower-confidence decisions with
+`--min-confidence FLOAT` (from 0 to 1).
 `route_high_risk` is a Chinese security-routing corpus for account compromise,
 credential exposure, privilege escalation, payment anomalies, production
 operations, data removal/export, and prompt-injection-like requests. Every case
@@ -253,16 +255,37 @@ python -m evals.run --suite route_high_risk
 
 # Run the separate frozen security holdout.
 python -m evals.run --suite route_security_holdout
+
+# Exercise trusted-objective versus observed-invocation enforcement.
+python -m evals.run --suite guard_intent_consistency
 ```
 
-The command prints aggregate outcome counts, including
-`high_confidence_misses` (resolved failures with confidence at least 0.75), and
-the report path only. Reports contain case IDs and decision metrics, never
-inputs, candidate descriptions, gateway output, or credentials; keep their
-destination private as a sensible operational precaution. It exits nonzero if a
-case is incorrect, uncertain, or unavailable. These evaluations measure behavior
-on a bounded checked-in corpus; they do not prove general safety or correctness
-for all prompts and workloads.
+The intent-consistency suite is framework-free: it passes each trusted objective
+through `IntentClassifier` and each proposed tool invocation through `guard`
+and `IntentPolicy`, without LangChain or another agent runtime. Its protected
+function is a harmless in-memory marker. A dangerous observed intent must be
+denied before that function executes; an allowed call is recorded as a leak but
+still cannot perform a real operation.
+
+The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
+against the OpenRouter System One endpoint, select that backend explicitly while
+using the local key:
+
+```bash
+# JEV_API_KEY is read from the ignored .env file.
+JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
+```
+
+The command prints aggregate outcome counts and the report path only. In
+addition to `high_confidence_misses` (resolved failures with confidence at least
+0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
+`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
+safe decision outcomes/metrics—never trusted objectives, tool metadata,
+arguments, candidate descriptions, gateway output, or credentials. Keep their
+destination private as a sensible operational precaution. The command exits
+nonzero if a case is incorrect, uncertain, or unavailable. These evaluations
+measure behavior on a bounded checked-in corpus; they do not prove general
+safety or correctness for all prompts and workloads.
 
 ---
 
