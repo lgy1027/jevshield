@@ -7,6 +7,7 @@ from .route import Route, RouteSelection, Router
 from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 from .integrators import guard_langchain_tool
 from .loop import LoopAction, LoopDecision, LoopPolicy, LoopStep, LoopTerminator
+from .review import LoopReviewAction, LoopReviewDecision, LoopReviewInput
 from .models import (
     Action,
     DevelopmentPolicy,
@@ -39,6 +40,9 @@ __all__ = [
     "LoopAction",
     "LoopDecision",
     "LoopPolicy",
+    "LoopReviewAction",
+    "LoopReviewDecision",
+    "LoopReviewInput",
     "LoopStep",
     "LoopTerminator",
     "Policy",
