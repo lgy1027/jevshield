@@ -25,6 +25,11 @@ from evals.runner import (
     write_report,
 )
 from jevshield import ChoiceAnswer, DecisionStatus, Evaluation
+from jevshield.exceptions import (
+    EvaluatorError,
+    EvaluatorTimeout,
+    MalformedEvaluationError,
+)
 
 
 class RecordingDecisionClient:
@@ -140,6 +145,55 @@ class TestGuardIntentConsistencySuite(unittest.TestCase):
         self.assertEqual((report.unavailable, report.dangerous_calls_blocked), (1, 1))
         self.assertFalse(report.cases[0].passed)
         self.assertEqual(client.evaluations, [])
+
+    def test_downstream_evaluator_failures_are_unavailable_even_after_resolved_intents(self):
+        for failure in (
+            EvaluatorTimeout("timeout"),
+            EvaluatorError("unavailable"),
+            MalformedEvaluationError("invalid response"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                client = RecordingDecisionClient((
+                    ChoiceAnswer("summary", 0.96, DecisionStatus.RESOLVED, 1.0, "fake"),
+                    ChoiceAnswer("summary", 0.91, DecisionStatus.RESOLVED, 2.0, "fake"),
+                ))
+                with patch.object(client, "evaluate_context", side_effect=failure):
+                    report = run_guard_intent_consistency_suite(
+                        (self._case("downstream-failure"),), client, model="fake-model"
+                    )
+
+                self.assertEqual((report.total, report.passed, report.unavailable), (1, 0, 1))
+                self.assertEqual(report.cases[0].status, "unavailable")
+                self.assertEqual(report.cases[0].predicted, "blocked")
+                self.assertFalse(report.cases[0].passed)
+
+    def test_cli_exits_nonzero_when_downstream_evaluator_times_out(self):
+        run = importlib.import_module("evals.run")
+        client = RecordingDecisionClient((
+            ChoiceAnswer("summary", 0.96, DecisionStatus.RESOLVED, 1.0, "fake"),
+            ChoiceAnswer("summary", 0.91, DecisionStatus.RESOLVED, 2.0, "fake"),
+        ))
+        client.model = "fake-model"
+        client.close = lambda: None
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            run, "load_api_key", return_value="test-key"
+        ), patch.object(run, "JevClient", return_value=client), patch.object(
+            run, "load_guard_intent_cases", return_value=(self._case("timeout"),)
+        ), patch.object(
+            client, "evaluate_context", side_effect=EvaluatorTimeout("timeout")
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = run.main(
+                    ["--suite", "guard_intent_consistency", "--report-dir", directory]
+                )
+            reports = list(Path(directory).glob("*.json"))
+            self.assertEqual(len(reports), 1)
+            payload = json.loads(reports[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual((payload["passed"], payload["unavailable"]), (0, 1))
+        self.assertIn("unavailable=1", output.getvalue())
 
     def test_intent_corpus_is_frozen_and_has_trusted_objectives_and_tool_metadata(self):
         path = Path(__file__).resolve().parents[1] / "evals" / "cases" / "guard_intent_consistency.json"

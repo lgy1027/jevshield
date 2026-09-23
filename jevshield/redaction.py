@@ -242,14 +242,34 @@ def build_observed_intent_state(context: GuardContext) -> str:
         ),
         "tool_name": _bounded_text(context.tool_name, MAX_TOOL_NAME_CHARS),
     }
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     available_for_payload = MAX_DECISION_STATE_CHARS - len(_DECISION_PREFIX)
-    if len(serialized) > available_for_payload:
+
+    def serialized_length() -> int:
+        return len(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+    if serialized_length() > available_for_payload:
         arguments = payload["arguments"]
-        payload["arguments"] = {
+        truncated_arguments = {
             "_truncated": "[TRUNCATED_ARGUMENTS]",
             "_serialized_length": len(
                 json.dumps(arguments, sort_keys=True, separators=(",", ":"))
             ),
         }
+        payload["arguments"] = truncated_arguments
+        if serialized_length() > available_for_payload:
+            payload["arguments"] = arguments
+            description = payload["tool_description"]
+            payload["tool_description"] = ""
+            if serialized_length() > available_for_payload:
+                payload["arguments"] = truncated_arguments
+
+            low, high = 0, len(description)
+            while low <= high:
+                middle = (low + high) // 2
+                payload["tool_description"] = description[:middle]
+                if serialized_length() <= available_for_payload:
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            payload["tool_description"] = description[:high]
     return build_decision_state(payload)

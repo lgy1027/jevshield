@@ -406,6 +406,9 @@ def run_guard_intent_consistency_suite(
                 normalized_status = {
                     "intent_uncertain": DecisionStatus.UNCERTAIN.value,
                     "intent_unavailable": DecisionStatus.UNAVAILABLE.value,
+                    "evaluator_timeout": DecisionStatus.UNAVAILABLE.value,
+                    "malformed_evaluation": DecisionStatus.UNAVAILABLE.value,
+                    "evaluator_error": DecisionStatus.UNAVAILABLE.value,
                 }.get(error.decision.evaluation.source)
 
         predicted = "allowed" if executed else "blocked"
