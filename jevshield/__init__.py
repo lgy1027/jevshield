@@ -2,6 +2,7 @@ from .decorators import guard
 from .exceptions import JevGuardError, SecurityViolationError
 from .client import JevClient
 from .classify import IntentClassifier, IntentResult
+from .intent import IntentAssessment, IntentPolicy, IntentStatus
 from .route import Route, RouteSelection, Router
 from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 from .integrators import guard_langchain_tool
@@ -31,7 +32,10 @@ __all__ = [
     "JevClient",
     "JevGuardError",
     "IntentClassifier",
+    "IntentAssessment",
+    "IntentPolicy",
     "IntentResult",
+    "IntentStatus",
     "LoopAction",
     "LoopDecision",
     "LoopPolicy",
