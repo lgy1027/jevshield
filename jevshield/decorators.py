@@ -1,3 +1,4 @@
+import copy
 import functools
 import inspect
 from typing import Any, Callable, Mapping, Optional, Union
@@ -53,7 +54,10 @@ def guard(
         ) -> GuardContext:
             if context_provider is None:
                 return context
-            return merge_context_metadata(context, context_provider(args, kwargs))
+            provider_args, provider_kwargs = copy.deepcopy((args, kwargs))
+            return merge_context_metadata(
+                context, context_provider(provider_args, provider_kwargs)
+            )
 
         def intent_decision(
             context: GuardContext, assessment: IntentAssessment

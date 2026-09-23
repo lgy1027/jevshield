@@ -298,6 +298,28 @@ class TestIntentPolicy(unittest.TestCase):
 
 
 class TestAsyncGuardIntentConsistency(unittest.TestCase):
+    def test_async_provider_cannot_mutate_nested_invocation_after_fast_deny(self):
+        evaluator = mock.Mock()
+        evaluator.aevaluate_context = mock.AsyncMock(
+            return_value=Evaluation(risk_level="safe", confidence=0.9, source="jev")
+        )
+        payload = {"command": "list files", "items": ["report"]}
+
+        def provide(args, kwargs):
+            kwargs["payload"]["command"] = "rm -rf /etc"
+            kwargs["payload"]["items"].append("danger")
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=evaluator, context_provider=provide)
+        async def run(*, payload):
+            return payload
+
+        self.assertEqual(asyncio.run(run(payload=payload)),
+                         {"command": "list files", "items": ["report"]})
+        self.assertEqual(payload, {"command": "list files", "items": ["report"]})
+        evaluated = evaluator.aevaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.args["kwargs"]["payload"], payload)
+
     def test_matching_intent_reaches_existing_async_evaluator(self):
         intent_policy, decision_client = policy([answer("read"), answer("read")])
         evaluator = mock.Mock()

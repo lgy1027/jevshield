@@ -830,6 +830,41 @@ class TestGuardIntentConsistency(unittest.TestCase):
         self.assertEqual(executions, [])
         client.evaluate_context.assert_not_called()
 
+    def test_provider_cannot_mutate_keyword_invocation_after_fast_deny(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+
+        def provide(args, kwargs):
+            kwargs["command"] = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, command):
+            return command
+
+        self.assertEqual(run(command="list files"), "list files")
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.args["kwargs"], {"command": "list files"})
+
+    def test_provider_cannot_mutate_nested_invocation_after_fast_deny(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        payload = {"command": "list files", "items": ["report"]}
+
+        def provide(args, kwargs):
+            kwargs["payload"]["command"] = "rm -rf /etc"
+            kwargs["payload"]["items"].append("danger")
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, payload):
+            return payload
+
+        self.assertEqual(run(payload=payload), {"command": "list files", "items": ["report"]})
+        self.assertEqual(payload, {"command": "list files", "items": ["report"]})
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.args["kwargs"]["payload"], payload)
+
     def test_local_fast_deny_runs_before_context_provider_and_intent(self):
         intent_policy, decision_client = self.intent_policy("read", "read")
         client = mock.Mock()
