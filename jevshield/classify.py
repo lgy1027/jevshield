@@ -87,11 +87,19 @@ class IntentClassifier(Generic[TIntent]):
         )
 
     def classify(self, state: Any) -> IntentResult[TIntent]:
-        answer = self._client.choose(build_decision_state(state), self._question)
-        return self._result_from_answer(answer)
+        return self._classify_framed(build_decision_state(state))
 
     async def aclassify(self, state: Any) -> IntentResult[TIntent]:
-        answer = await self._client.achoose(build_decision_state(state), self._question)
+        return await self._aclassify_framed(build_decision_state(state))
+
+    def _classify_framed(self, state: str) -> IntentResult[TIntent]:
+        """Classify a state already framed by the SDK's redaction helper."""
+        answer = self._client.choose(state, self._question)
+        return self._result_from_answer(answer)
+
+    async def _aclassify_framed(self, state: str) -> IntentResult[TIntent]:
+        """Async counterpart for an already framed, redacted state."""
+        answer = await self._client.achoose(state, self._question)
         return self._result_from_answer(answer)
 
     def _result_from_answer(self, answer: ChoiceAnswer) -> IntentResult[TIntent]:

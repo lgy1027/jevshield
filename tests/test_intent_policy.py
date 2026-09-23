@@ -4,8 +4,10 @@ import asyncio
 from dataclasses import FrozenInstanceError
 from enum import Enum
 import unittest
+from unittest import mock
 
 from jevshield.classify import IntentClassifier
+from jevshield.client import JevClient
 from jevshield.intent import IntentPolicy, IntentStatus
 from jevshield.models import (
     Action,
@@ -205,6 +207,62 @@ class TestIntentPolicy(unittest.TestCase):
         self.assertIn("read_order", client.states[1])
         self.assertNotIn('"intent"', client.states[1])
         self.assertLessEqual(len(client.states[1]), MAX_DECISION_STATE_CHARS)
+
+    def test_large_observed_arguments_retain_tool_identity(self):
+        trusted_objective = "trusted objective: read order 42"
+        for size in (3800, 3850):
+            with self.subTest(size=size):
+                guard_policy, client = policy([answer("read"), answer("delete")])
+                invocation = GuardContext(
+                    tool_name="delete_order",
+                    tool_description="Delete an order.",
+                    args={"payload": "x" * size},
+                    intent=trusted_objective,
+                )
+
+                assessment = guard_policy.assess(invocation)
+
+                self.assertEqual(assessment.status, IntentStatus.MISMATCH)
+                self.assertIn('"tool_name":"delete_order"', client.states[1])
+                self.assertIn('"tool_description":"Delete an order."', client.states[1])
+                self.assertNotIn(trusted_objective, client.states[1])
+                self.assertLessEqual(len(client.states[1]), MAX_DECISION_STATE_CHARS)
+
+    def test_large_observed_identity_reaches_real_client_payload(self):
+        client = JevClient(api_key="test-key", backend="typesafe")
+        client.is_mock_mode = False
+        client._http_client = mock.Mock(is_closed=False)
+        responses = []
+        for value in ("read", "delete"):
+            response = mock.Mock(status_code=200)
+            response.json.return_value = {"answers": {
+                "intent": {"type": "choice", "choice": value, "confidence": 0.95}
+            }}
+            responses.append(response)
+        client._http_client.post.side_effect = responses
+        classifier = IntentClassifier(
+            Intent,
+            {Intent.READ: "Read data.", Intent.DELETE: "Delete data."},
+            client,
+        )
+        guard_policy = IntentPolicy(classifier=classifier)
+        trusted_objective = "trusted objective: read order 42"
+        invocation = GuardContext(
+            tool_name="delete_order",
+            tool_description="Delete an order.",
+            args={"payload": "x" * 3800, "api_key": "sk-abcdefghijklmnopqrstuvwxyz123456"},
+            intent=trusted_objective,
+        )
+
+        assessment = guard_policy.assess(invocation)
+
+        self.assertEqual(assessment.status, IntentStatus.MISMATCH)
+        state = client._http_client.post.call_args.kwargs["json"]["state"]
+        self.assertTrue('"tool_name":"delete_order"' in state, "tool name was lost")
+        self.assertTrue('"tool_description":"Delete an order."' in state, "tool description was lost")
+        self.assertNotIn(trusted_objective, state)
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", state)
+        self.assertLessEqual(len(state), MAX_DECISION_STATE_CHARS)
 
     def test_relation_callback_can_approve_compatible_intents(self):
         guard_policy, _ = policy(

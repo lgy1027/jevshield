@@ -53,7 +53,9 @@ class IntentPolicy(Generic[TIntent]):
                 IntentStatus.SKIPPED, None, None, None, "No trusted intent supplied."
             )
         expected = self.classifier.classify(context.intent)
-        observed = self.classifier.classify(build_observed_intent_state(context))
+        observed = self.classifier._classify_framed(
+            build_observed_intent_state(context)
+        )
         return self._assess_results(expected, observed)
 
     async def aassess(self, context: GuardContext) -> IntentAssessment[TIntent]:
@@ -62,7 +64,7 @@ class IntentPolicy(Generic[TIntent]):
                 IntentStatus.SKIPPED, None, None, None, "No trusted intent supplied."
             )
         expected = await self.classifier.aclassify(context.intent)
-        observed = await self.classifier.aclassify(
+        observed = await self.classifier._aclassify_framed(
             build_observed_intent_state(context)
         )
         return self._assess_results(expected, observed)
