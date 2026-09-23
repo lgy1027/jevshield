@@ -1,4 +1,3 @@
-import copy
 import functools
 import inspect
 from typing import Any, Callable, Mapping, Optional, Union
@@ -15,6 +14,37 @@ from .redaction import redact_for_audit
 from .rules import LocalRuleEngine, RuleOutcome, RuleResult
 
 _global_client: Optional[JevClient] = None
+
+
+def _provider_snapshot(value: Any, active_ids: set) -> Any:
+    """Copy plain invocation data without invoking user-defined copy hooks."""
+
+    value_type = type(value)
+    if value_type in (type(None), bool, int, float, complex, str, bytes):
+        return value
+    if value_type not in (dict, list, tuple, set, frozenset, bytearray):
+        raise TypeError("Context provider arguments must contain only plain data.")
+    identity = id(value)
+    if identity in active_ids:
+        raise TypeError("Context provider arguments cannot contain cycles.")
+    active_ids.add(identity)
+    try:
+        if value_type is dict:
+            return {
+                _provider_snapshot(key, active_ids): _provider_snapshot(item, active_ids)
+                for key, item in value.items()
+            }
+        if value_type is list:
+            return [_provider_snapshot(item, active_ids) for item in value]
+        if value_type is tuple:
+            return tuple(_provider_snapshot(item, active_ids) for item in value)
+        if value_type is set:
+            return {_provider_snapshot(item, active_ids) for item in value}
+        if value_type is frozenset:
+            return frozenset(_provider_snapshot(item, active_ids) for item in value)
+        return bytearray(value)
+    finally:
+        active_ids.remove(identity)
 
 
 def get_client() -> JevClient:
@@ -54,7 +84,9 @@ def guard(
         ) -> GuardContext:
             if context_provider is None:
                 return context
-            provider_args, provider_kwargs = copy.deepcopy((args, kwargs))
+            provider_args, provider_kwargs = _provider_snapshot(
+                (args, kwargs), set()
+            )
             return merge_context_metadata(
                 context, context_provider(provider_args, provider_kwargs)
             )

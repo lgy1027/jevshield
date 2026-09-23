@@ -865,6 +865,34 @@ class TestGuardIntentConsistency(unittest.TestCase):
         evaluated = client.evaluate_context.call_args.args[0]
         self.assertEqual(evaluated.args["kwargs"]["payload"], payload)
 
+    def test_provider_rejects_nested_object_with_aliasing_deepcopy_hook(self):
+        class AliasingDict(dict):
+            def __deepcopy__(self, memo):
+                return self
+
+        payload = {"command": AliasingDict({"value": "list files"})}
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        provider_calls = []
+        executions = []
+
+        def provide(args, kwargs):
+            provider_calls.append(True)
+            kwargs["payload"]["command"]["value"] = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, payload):
+            executions.append(payload)
+
+        with self.assertRaises(TypeError):
+            run(payload=payload)
+
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(executions, [])
+        self.assertEqual(payload["command"]["value"], "list files")
+        client.evaluate_context.assert_not_called()
+
     def test_local_fast_deny_runs_before_context_provider_and_intent(self):
         intent_policy, decision_client = self.intent_policy("read", "read")
         client = mock.Mock()
