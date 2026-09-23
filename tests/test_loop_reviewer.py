@@ -1,9 +1,64 @@
+import asyncio
+import json
 import math
 import unittest
 from dataclasses import FrozenInstanceError
 
-from jevshield.review import LoopReviewAction, LoopReviewDecision, LoopReviewInput
-from jevshield.runtime import DecisionStatus
+from jevshield.review import (
+    LoopReviewAction,
+    LoopReviewDecision,
+    LoopReviewer,
+    LoopReviewInput,
+)
+from jevshield.runtime import ChoiceAnswer, DecisionStatus
+
+
+class RecordingDecisionClient:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.states = []
+        self.questions = []
+
+    def choose(self, state, question):
+        self.states.append(state)
+        self.questions.append(question)
+        return self.answers.pop(0)
+
+    async def achoose(self, state, question):
+        return self.choose(state, question)
+
+
+def answer(value, confidence=0.9):
+    return ChoiceAnswer(
+        value,
+        confidence,
+        DecisionStatus.RESOLVED,
+        2.5,
+        "jev",
+        "reviewed",
+    )
+
+
+def unavailable_answer():
+    return ChoiceAnswer(
+        None,
+        0.0,
+        DecisionStatus.UNAVAILABLE,
+        3.0,
+        "timeout",
+        "unavailable",
+    )
+
+
+def review_input():
+    return LoopReviewInput(
+        "Find answer from approved evidence.",
+        "evidence_insufficient",
+        3,
+        spent_budget=1.5,
+        step_summaries=("searched approved source", "no sufficient evidence"),
+        evidence_summary="Evidence remains insufficient.",
+    )
 
 
 class TestLoopReviewContracts(unittest.TestCase):
@@ -105,6 +160,75 @@ class TestLoopReviewContracts(unittest.TestCase):
             LoopReviewDecision(None, DecisionStatus.UNAVAILABLE, 0.0, 1.0, "")
         with self.assertRaises(ValueError):
             LoopReviewDecision(None, DecisionStatus.UNAVAILABLE, 0.0, 1.0, "timeout", None)
+
+
+class TestLoopReviewer(unittest.TestCase):
+    def test_review_maps_choice_and_redacts_complete_state(self):
+        secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        client = RecordingDecisionClient([answer("ask_for_help")])
+
+        result = LoopReviewer(client, min_confidence=0.7).review(
+            LoopReviewInput(
+                "Find answer from approved evidence.",
+                "evidence_insufficient",
+                3,
+                spent_budget=1.5,
+                step_summaries=("searched approved source",),
+                evidence_summary=secret,
+            )
+        )
+
+        self.assertEqual(result.action, LoopReviewAction.ASK_FOR_HELP)
+        self.assertEqual(result.status, DecisionStatus.RESOLVED)
+        self.assertEqual(client.questions[0].name, "loop_review")
+        self.assertEqual(
+            set(client.questions[0].criteria),
+            {"continue", "ask_for_help", "stop_stalled"},
+        )
+        self.assertNotIn(secret, client.states[0])
+        payload = json.loads(client.states[0].split(": ", 1)[1])
+        self.assertEqual(
+            payload,
+            {
+                "checkpoint": "evidence_insufficient",
+                "evidence_summary": "[REDACTED_SECRET]",
+                "iteration": 3,
+                "spent_budget": 1.5,
+                "step_summaries": ["searched approved source"],
+                "trusted_objective": "Find answer from approved evidence.",
+            },
+        )
+
+    def test_unavailable_low_confidence_and_unknown_have_no_action(self):
+        unavailable = LoopReviewer(
+            RecordingDecisionClient([unavailable_answer()])
+        ).review(review_input())
+        low_confidence = LoopReviewer(
+            RecordingDecisionClient([answer("continue", 0.4)]),
+            min_confidence=0.7,
+        ).review(review_input())
+        unknown = LoopReviewer(
+            RecordingDecisionClient([answer("unknown")])
+        ).review(review_input())
+
+        self.assertIsNone(unavailable.action)
+        self.assertEqual(unavailable.status, DecisionStatus.UNAVAILABLE)
+        self.assertIsNone(low_confidence.action)
+        self.assertEqual(low_confidence.status, DecisionStatus.UNCERTAIN)
+        self.assertIsNone(unknown.action)
+        self.assertEqual(unknown.status, DecisionStatus.UNCERTAIN)
+
+    def test_areview_matches_sync_review(self):
+        sync_result = LoopReviewer(
+            RecordingDecisionClient([answer("stop_stalled")])
+        ).review(review_input())
+        async_result = asyncio.run(
+            LoopReviewer(
+                RecordingDecisionClient([answer("stop_stalled")])
+            ).areview(review_input())
+        )
+
+        self.assertEqual(async_result, sync_result)
 
 
 if __name__ == "__main__":

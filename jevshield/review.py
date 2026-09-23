@@ -3,8 +3,10 @@
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
+from .redaction import build_decision_state
+from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionClient
 from .runtime import DecisionStatus
 
 
@@ -92,3 +94,103 @@ class LoopReviewDecision:
             raise ValueError("source must be a non-empty string.")
         if type(self.reason) is not str:
             raise ValueError("reason must be a string.")
+
+
+class LoopReviewer:
+    """Recommend a semantic action at an application-selected checkpoint."""
+
+    def __init__(
+        self,
+        client: DecisionClient,
+        min_confidence: float = 0.0,
+    ) -> None:
+        if (
+            isinstance(min_confidence, bool)
+            or not isinstance(min_confidence, (int, float))
+            or not math.isfinite(float(min_confidence))
+            or not 0.0 <= min_confidence <= 1.0
+        ):
+            raise ValueError("min_confidence must be a finite number from 0 to 1.")
+
+        self._client = client
+        self._min_confidence = float(min_confidence)
+        self._actions_by_value: Dict[str, LoopReviewAction] = {
+            action.value: action for action in LoopReviewAction
+        }
+        self._question = ChoiceQuestion(
+            name="loop_review",
+            instructions=(
+                "Recommend whether the application should continue, ask for help, "
+                "or stop because progress has stalled."
+            ),
+            criteria={
+                LoopReviewAction.CONTINUE.value: (
+                    "Continue because useful progress remains likely."
+                ),
+                LoopReviewAction.ASK_FOR_HELP.value: (
+                    "Ask for human or application help before continuing."
+                ),
+                LoopReviewAction.STOP_STALLED.value: (
+                    "Stop because the work is stalled without sufficient progress."
+                ),
+            },
+        )
+
+    def review(self, value: LoopReviewInput) -> LoopReviewDecision:
+        answer = self._client.choose(self._state(value), self._question)
+        return self._decision_from_answer(answer)
+
+    async def areview(self, value: LoopReviewInput) -> LoopReviewDecision:
+        answer = await self._client.achoose(self._state(value), self._question)
+        return self._decision_from_answer(answer)
+
+    @staticmethod
+    def _state(value: LoopReviewInput) -> str:
+        return build_decision_state(
+            {
+                "trusted_objective": value.trusted_objective,
+                "checkpoint": value.checkpoint,
+                "iteration": value.iteration,
+                "spent_budget": value.spent_budget,
+                "step_summaries": value.step_summaries,
+                "evidence_summary": value.evidence_summary,
+            }
+        )
+
+    def _decision_from_answer(self, answer: ChoiceAnswer) -> LoopReviewDecision:
+        if answer.status is not DecisionStatus.RESOLVED:
+            return LoopReviewDecision(
+                None,
+                answer.status,
+                answer.confidence,
+                answer.latency_ms,
+                answer.source,
+                answer.reason,
+            )
+        if answer.confidence < self._min_confidence:
+            return LoopReviewDecision(
+                None,
+                DecisionStatus.UNCERTAIN,
+                answer.confidence,
+                answer.latency_ms,
+                answer.source,
+                "Confidence is below min_confidence.",
+            )
+        action = self._actions_by_value.get(answer.value)
+        if action is None:
+            return LoopReviewDecision(
+                None,
+                DecisionStatus.UNCERTAIN,
+                answer.confidence,
+                answer.latency_ms,
+                answer.source,
+                "Returned value is not a valid loop review action.",
+            )
+        return LoopReviewDecision(
+            action,
+            DecisionStatus.RESOLVED,
+            answer.confidence,
+            answer.latency_ms,
+            answer.source,
+            answer.reason,
+        )
