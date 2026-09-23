@@ -423,7 +423,13 @@ def run_guard_intent_consistency_suite(
             status=status,
             confidence=observed_client.confidence,
             latency_ms=observed_client.latency_ms,
-            passed=predicted == case.expected,
+            passed=(
+                predicted == case.expected
+                and status not in (
+                    DecisionStatus.UNCERTAIN.value,
+                    DecisionStatus.UNAVAILABLE.value,
+                )
+            ),
         ))
     return aggregate_report("guard_intent_consistency", model, results)
 
