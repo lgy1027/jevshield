@@ -67,10 +67,12 @@ class TestLoopReviewContracts(unittest.TestCase):
         from jevshield import LoopReviewAction as PublicLoopReviewAction
         from jevshield import LoopReviewDecision as PublicLoopReviewDecision
         from jevshield import LoopReviewInput as PublicLoopReviewInput
+        from jevshield import LoopReviewer as PublicLoopReviewer
 
         self.assertIs(PublicLoopReviewAction, LoopReviewAction)
         self.assertIs(PublicLoopReviewDecision, LoopReviewDecision)
         self.assertIs(PublicLoopReviewInput, LoopReviewInput)
+        self.assertIs(PublicLoopReviewer, LoopReviewer)
 
     def test_review_input_is_immutable_and_validated(self):
         value = LoopReviewInput(
