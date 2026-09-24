@@ -49,6 +49,81 @@ def resolved(action, reason="reviewed"):
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_prompt_calibration_example_aggregates_each_candidate_separately(self):
+        path = ROOT / "examples" / "09_live_multi_agent_prompt_calibration_eval.py"
+        self.assertTrue(path.is_file())
+        example = load_example(path.name)
+        reports = {
+            "baseline": iter(
+                (
+                    {
+                        "route_total": 2,
+                        "route_status_counts": {"resolved": 1, "uncertain": 1},
+                        "handoff_action_counts": {"continue": 2},
+                        "handoff_count": 1,
+                        "expected_route_matches": 1,
+                        "full_chain_completed": False,
+                    },
+                )
+            ),
+            "explicit_coding_task": iter(
+                (
+                    {
+                        "route_total": 2,
+                        "route_status_counts": {"resolved": 2},
+                        "handoff_action_counts": {"continue": 3},
+                        "handoff_count": 2,
+                        "expected_route_matches": 2,
+                        "full_chain_completed": True,
+                    },
+                )
+            ),
+            "coding_exclusive": iter(
+                (
+                    {
+                        "route_total": 2,
+                        "route_status_counts": {"resolved": 2},
+                        "handoff_action_counts": {"continue": 3},
+                        "handoff_count": 2,
+                        "expected_route_matches": 1,
+                        "full_chain_completed": True,
+                    },
+                )
+            ),
+        }
+        calls = []
+
+        def run_candidate(candidate_id):
+            calls.append(candidate_id)
+            return next(reports[candidate_id])
+
+        report = example.run_prompt_calibration(run_candidate, runs=1)
+
+        self.assertEqual(report["runs_per_candidate"], 1)
+        self.assertEqual(
+            set(report["candidates"]),
+            {"baseline", "explicit_coding_task", "coding_exclusive"},
+        )
+        self.assertEqual(
+            report["candidates"]["explicit_coding_task"]["full_chain_count"], 1
+        )
+        self.assertEqual(
+            report["candidates"]["baseline"]["route_status_counts"],
+            {"resolved": 1, "uncertain": 1},
+        )
+        self.assertEqual(calls, ["baseline", "explicit_coding_task", "coding_exclusive"])
+
+    def test_default_handoff_prompt_matches_the_selected_calibration_candidate(self):
+        single_run = load_example("07_live_multi_agent_handoff_eval.py")
+        calibration = load_example("09_live_multi_agent_prompt_calibration_eval.py")
+
+        candidate = calibration.CANDIDATES[calibration.SELECTED_CANDIDATE_ID]
+
+        self.assertEqual(single_run.REQUESTS[1], candidate["second_request"])
+        self.assertEqual(
+            single_run.ROUTES["coding"].description, candidate["coding_description"]
+        )
+
     def test_multi_agent_handoff_stability_example_aggregates_safe_run_reports(self):
         path = ROOT / "examples" / "08_live_multi_agent_handoff_stability_eval.py"
         self.assertTrue(path.is_file())

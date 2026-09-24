@@ -23,7 +23,7 @@ ROUTES = {
         target="research",
     ),
     "coding": Route(
-        description="Implement or inspect code changes after requirements are clear.",
+        description="Write, modify, or inspect source code only; do not perform research or testing.",
         target="coding",
     ),
     "testing": Route(
@@ -34,8 +34,9 @@ ROUTES = {
 
 REQUESTS = (
     "Research the documented delivery policy before proposing an answer.",
-    "Implement the approved delivery-policy presentation after research returns.",
+    "Assign a source-code implementation task to the coding Agent; research is complete and no further documentation lookup is needed.",
 )
+EXPECTED_ROUTE_KEYS = ("research", "coding")
 
 
 def require_live_client(client=None):
@@ -50,10 +51,16 @@ def require_live_client(client=None):
     return client
 
 
-def run_live_evaluation(client):
+def run_live_evaluation(
+    client,
+    *,
+    routes=ROUTES,
+    requests=REQUESTS,
+    expected_route_keys=EXPECTED_ROUTE_KEYS,
+):
     """Route twice through Jev while locally tracking an explicit return flow."""
 
-    router = Router(ROUTES, client, min_confidence=0.7)
+    router = Router(routes, client, min_confidence=0.7)
     tracker = HandoffTracker(
         HandoffPolicy(max_handoffs=3, max_repeated_handoffs=3)
     )
@@ -62,9 +69,9 @@ def run_live_evaluation(client):
     handoff_count = 0
     expected_route_matches = 0
 
-    first = router.select({"request": REQUESTS[0]})
+    first = router.select({"request": requests[0]})
     route_statuses[first.status.value] += 1
-    if first.route_key == "research":
+    if first.route_key == expected_route_keys[0]:
         expected_route_matches += 1
     if first.route_key is None:
         return _report(
@@ -83,9 +90,9 @@ def run_live_evaluation(client):
     handoff_count = returned.handoff_count
     handoff_actions[returned.action.value] += 1
 
-    second = router.select({"request": REQUESTS[1]})
+    second = router.select({"request": requests[1]})
     route_statuses[second.status.value] += 1
-    if second.route_key == "coding":
+    if second.route_key == expected_route_keys[1]:
         expected_route_matches += 1
     if second.route_key is None:
         return _report(
@@ -109,7 +116,7 @@ def _report(route_statuses, handoff_actions, handoff_count, expected_route_match
         "handoff_action_counts": dict(sorted(handoff_actions.items())),
         "handoff_count": handoff_count,
         "expected_route_matches": expected_route_matches,
-        "full_chain_completed": handoff_count == len(REQUESTS),
+        "full_chain_completed": handoff_count == 2,
     }
 
 

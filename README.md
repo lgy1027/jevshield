@@ -535,6 +535,7 @@ python examples/05_live_rag_checkpoint.py
 python examples/06_live_loop_review_eval.py
 python examples/07_live_multi_agent_handoff_eval.py
 python examples/08_live_multi_agent_handoff_stability_eval.py
+python examples/09_live_multi_agent_prompt_calibration_eval.py
 ```
 
 `04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
@@ -557,6 +558,11 @@ tool, and ordinary unit tests never invoke its network path.
 `08_live_multi_agent_handoff_stability_eval.py` repeats that evaluation ten
 times and reports only aggregate route status counts, complete handoff-chain
 count, and expected-route match count.
+
+`09_live_multi_agent_prompt_calibration_eval.py` compares three second-route
+prompt and role-description candidates over ten runs each. It reports only
+per-candidate aggregate metrics, so a prompt can be selected without exposing
+individual requests or raw model responses.
 
 ---
 
