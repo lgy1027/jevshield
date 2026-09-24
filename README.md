@@ -39,7 +39,44 @@ For LangChain tool integrations:
 pip install "jevshield[langchain]"
 ```
 
-### 2. Basic Decorator Usage (Sync & Async)
+### 2. Minimal Agent Integration (Recommended)
+
+JevShield is a pre-check layer, not an Agent runtime. Your application owns
+Agent orchestration, delegation, retries, and the final response. Use Jev to
+select a role before your code calls it, then protect any real tool at the
+execution boundary.
+
+```python
+from jevshield import DecisionStatus, JevClient, ProductionPolicy, Route, Router, guard
+
+client = JevClient(api_key="ts-...")
+
+router = Router(
+    {
+        "research": Route("Find facts in approved sources.", run_research_agent),
+        "coding": Route("Implement source-code changes.", run_coding_agent),
+    },
+    client=client,
+    min_confidence=0.7,
+)
+
+
+@guard(policy=ProductionPolicy(), client=client)
+def write_change(path: str, content: str):
+    return application_write(path, content)
+
+
+selection = router.select({"request": user_request})
+if selection.status is DecisionStatus.RESOLVED and selection.target is not None:
+    return selection.target(user_request)  # Your code owns this invocation.
+return ask_for_clarification_or_retry_later(selection.status)
+```
+
+This is the default integration path. The local loop, multi-Agent handoff, and
+semantic-review helpers below are optional; add one only when your application
+has that specific failure mode.
+
+### 3. Guarded Tool Usage (Sync & Async)
 
 ```python
 from jevshield import ProductionPolicy, SecurityViolationError, guard
@@ -395,7 +432,7 @@ def cancel_order(order_id: str) -> str:
     return orders_api.cancel(order_id)
 ```
 
-## Local Multi-Agent Handoff Control
+## Optional: Local Multi-Agent Handoff Control
 
 `HandoffTracker` is an optional local limit around application-owned Agent
 delegation. It does not route, invoke an Agent, call Jev, or authorize a tool.
@@ -424,7 +461,7 @@ local control record. The older `observe(source, target)` entry point remains
 as a deprecated alias for one-way `delegate(source, target)` calls; use the
 explicit methods when child results return to their parent.
 
-## Local Agent Loop Termination
+## Optional: Local Agent Loop Controls
 
 `LoopTerminator` is an optional, framework-independent local control for
 stopping retry loops. It does not evaluate tools, authorize execution, or call
@@ -521,7 +558,7 @@ if evidence_checkpoint_reached:
 `LoopReviewer` recommends loop control only. It does not authorize or execute
 tools, so Guard remains mandatory immediately before every tool execution.
 
-### Live plain-Python demonstrations
+### Development-only live demonstrations
 
 The two runnable examples exercise the public APIs against a real Jev service;
 they are intentionally small application-owned flows, not a general Agent or
@@ -553,7 +590,8 @@ termination control; ordinary unit tests never invoke this network path.
 `07_live_multi_agent_handoff_eval.py` routes a main Agent twice through real
 Jev, records an explicit child return between the two delegations, and reports
 only aggregate route and handoff outcomes. It never invokes a child Agent or a
-tool, and ordinary unit tests never invoke its network path.
+tool. `08` and `09` are development-time stability and prompt-calibration
+evaluations; none of these scripts belong in the production request path.
 
 `08_live_multi_agent_handoff_stability_eval.py` repeats that evaluation ten
 times and reports only aggregate route status counts, complete handoff-chain
