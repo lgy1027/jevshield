@@ -1,7 +1,9 @@
 """jevshield 核心逻辑测试（stdlib unittest，零第三方依赖）。"""
 import asyncio
+import importlib
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
+from importlib.metadata import PackageNotFoundError
 import json
 import os
 import sys
@@ -13,6 +15,7 @@ from unittest import mock
 
 import httpx
 
+import jevshield.client as client_module
 from jevshield.client import JevClient, DEFAULT_BACKEND
 from jevshield.audit import CallbackAuditSink
 from jevshield.core import (
@@ -1611,6 +1614,16 @@ class TestRetryAndFallback(unittest.TestCase):
 
 
 class TestBackendResolution(unittest.TestCase):
+    def test_user_agent_fallback_matches_release_version(self):
+        try:
+            with mock.patch(
+                "importlib.metadata.version", side_effect=PackageNotFoundError
+            ):
+                reloaded_client = importlib.reload(client_module)
+                self.assertEqual(reloaded_client._USER_AGENT, "jevshield/0.1.2")
+        finally:
+            importlib.reload(client_module)
+
     def test_timeout_uses_environment_default_when_not_explicit(self):
         with mock.patch.dict(os.environ, {"JEV_TIMEOUT_SECONDS": "7.5"}, clear=True):
             client = JevClient(api_key="k")
