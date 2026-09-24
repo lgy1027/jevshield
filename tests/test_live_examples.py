@@ -32,6 +32,16 @@ class DemoClient:
         return Evaluation(risk_level="safe", confidence=1.0, source="test")
 
 
+class SequenceDemoClient(DemoClient):
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.states = []
+
+    def choose(self, state, question):
+        self.states.append(state)
+        return self.answers.pop(0)
+
+
 def resolved(action, reason="reviewed"):
     return ChoiceAnswer(
         action, 0.9, DecisionStatus.RESOLVED, 1.0, "test", reason
@@ -39,6 +49,79 @@ def resolved(action, reason="reviewed"):
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_multi_agent_handoff_example_exposes_a_safe_aggregator(self):
+        path = ROOT / "examples" / "07_live_multi_agent_handoff_eval.py"
+        self.assertTrue(path.is_file())
+        self.assertTrue(callable(load_example(path.name).run_live_evaluation))
+
+    def test_multi_agent_handoff_live_eval_routes_twice_and_returns_to_main(self):
+        example = load_example("07_live_multi_agent_handoff_eval.py")
+        client = SequenceDemoClient([resolved("research"), resolved("coding")])
+
+        report = example.run_live_evaluation(client)
+
+        self.assertEqual(
+            set(report),
+            {"route_total", "route_status_counts", "handoff_action_counts", "handoff_count"},
+        )
+        self.assertEqual(report["route_total"], 2)
+        self.assertEqual(report["route_status_counts"], {"resolved": 2})
+        self.assertEqual(report["handoff_action_counts"], {"continue": 3})
+        self.assertEqual(report["handoff_count"], 2)
+        self.assertEqual(len(client.states), 2)
+        self.assertNotIn("delivery policy", repr(report).lower())
+
+    def test_multi_agent_handoff_live_eval_stops_after_an_uncertain_first_route(self):
+        example = load_example("07_live_multi_agent_handoff_eval.py")
+        client = SequenceDemoClient(
+            [
+                ChoiceAnswer(
+                    None,
+                    0.6,
+                    DecisionStatus.UNCERTAIN,
+                    1.0,
+                    "test",
+                    "raw-route-reason-must-not-escape",
+                )
+            ]
+        )
+
+        report = example.run_live_evaluation(client)
+
+        self.assertEqual(report["route_total"], 1)
+        self.assertEqual(report["route_status_counts"], {"uncertain": 1})
+        self.assertEqual(report["handoff_action_counts"], {})
+        self.assertEqual(report["handoff_count"], 0)
+        self.assertEqual(len(client.states), 1)
+        self.assertNotIn("raw-route-reason-must-not-escape", repr(report))
+
+    def test_multi_agent_handoff_live_eval_stops_after_an_unavailable_second_route(self):
+        example = load_example("07_live_multi_agent_handoff_eval.py")
+        client = SequenceDemoClient(
+            [
+                resolved("research"),
+                ChoiceAnswer(
+                    None,
+                    0.0,
+                    DecisionStatus.UNAVAILABLE,
+                    1.0,
+                    "timeout",
+                    "raw-unavailable-reason-must-not-escape",
+                ),
+            ]
+        )
+
+        report = example.run_live_evaluation(client)
+
+        self.assertEqual(report["route_total"], 2)
+        self.assertEqual(
+            report["route_status_counts"], {"resolved": 1, "unavailable": 1}
+        )
+        self.assertEqual(report["handoff_action_counts"], {"continue": 2})
+        self.assertEqual(report["handoff_count"], 1)
+        self.assertEqual(len(client.states), 2)
+        self.assertNotIn("raw-unavailable-reason-must-not-escape", repr(report))
+
     def test_live_evaluation_example_exposes_a_safe_aggregator(self):
         path = ROOT / "examples" / "06_live_loop_review_eval.py"
         self.assertTrue(path.is_file())
@@ -104,6 +187,7 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
             "04_live_agent_loop.py",
             "05_live_rag_checkpoint.py",
             "06_live_loop_review_eval.py",
+            "07_live_multi_agent_handoff_eval.py",
         ):
             with self.subTest(filename=filename):
                 example = load_example(filename)

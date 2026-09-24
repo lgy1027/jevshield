@@ -533,6 +533,7 @@ export JEV_API_KEY="your-key"
 python examples/04_live_agent_loop.py
 python examples/05_live_rag_checkpoint.py
 python examples/06_live_loop_review_eval.py
+python examples/07_live_multi_agent_handoff_eval.py
 ```
 
 `04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
@@ -546,6 +547,11 @@ typed status and action. An `uncertain` or `unavailable` result with
 for Agent planning, insufficient RAG evidence, and conflicting RAG evidence.
 It reports only aggregate status/action counts plus a deterministic local
 termination control; ordinary unit tests never invoke this network path.
+
+`07_live_multi_agent_handoff_eval.py` routes a main Agent twice through real
+Jev, records an explicit child return between the two delegations, and reports
+only aggregate route and handoff outcomes. It never invokes a child Agent or a
+tool, and ordinary unit tests never invoke its network path.
 
 ---
 
