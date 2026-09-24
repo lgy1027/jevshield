@@ -395,6 +395,30 @@ def cancel_order(order_id: str) -> str:
     return orders_api.cancel(order_id)
 ```
 
+## Local Multi-Agent Handoff Control
+
+`HandoffTracker` is an optional local limit around application-owned Agent
+delegation. It does not route, invoke an Agent, call Jev, or authorize a tool.
+It returns `human_escalation` when delegation reaches its budget, repeats the
+same transfer, or returns to a role already visited in the current top-level
+task.
+
+```python
+from jevshield import HandoffAction, HandoffPolicy, HandoffTracker
+
+handoffs = HandoffTracker(HandoffPolicy(max_handoffs=4))
+
+decision = handoffs.observe("research", "coding")
+if decision.action is HandoffAction.HUMAN_ESCALATION:
+    return request_human_help(decision.reason)
+
+run_coding_agent()
+```
+
+Call `reset()` before reusing a tracker for a different top-level task. Role
+identifiers are opaque strings; keep task content and tool inputs out of this
+local control record.
+
 ## Local Agent Loop Termination
 
 `LoopTerminator` is an optional, framework-independent local control for
