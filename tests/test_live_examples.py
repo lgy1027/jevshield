@@ -1,10 +1,13 @@
 import importlib.util
 import os
 from pathlib import Path
+import asyncio
 import unittest
 from unittest.mock import patch
 
+from jevshield import SecurityViolationError
 from jevshield.models import Evaluation
+from jevshield.rules import RuleOutcome
 from jevshield.runtime import ChoiceAnswer, DecisionStatus
 
 
@@ -49,6 +52,63 @@ def resolved(action, reason="reviewed"):
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_async_and_sql_example_stays_offline_and_fast_denies(self):
+        """Changing the example client to ambient lookup must fail this test."""
+        with patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):
+            example = load_example("01_async_and_sql.py")
+
+        self.assertTrue(example.demo_client.is_mock_mode)
+        self.assertEqual(
+            example.execute_sql_query("SELECT id FROM users WHERE id = 42;"),
+            "Query ok: SELECT id FROM users WHERE id = 42;",
+        )
+
+        def unexpected_evaluation(*_args, **_kwargs):
+            raise AssertionError("Fast-Deny must run before the evaluator")
+
+        async def unexpected_async_evaluation(*_args, **_kwargs):
+            raise AssertionError("Fast-Deny must run before the evaluator")
+
+        example.demo_client.evaluate_context = unexpected_evaluation
+        example.demo_client.aevaluate_context = unexpected_async_evaluation
+        with self.assertRaises(SecurityViolationError) as sql_error:
+            example.execute_sql_query("DROP TABLE users;")
+        self.assertEqual(sql_error.exception.rule_result.outcome, RuleOutcome.DENY)
+        self.assertFalse(sql_error.exception.decision.network_called)
+        with self.assertRaises(SecurityViolationError) as shell_error:
+            asyncio.run(example.async_bash_executor("rm -rf /var/lib/docker"))
+        self.assertEqual(shell_error.exception.rule_result.outcome, RuleOutcome.DENY)
+        self.assertFalse(shell_error.exception.decision.network_called)
+
+    def test_langchain_example_stays_offline_and_fast_denies(self):
+        """Changing the wrapper client to ambient lookup must fail this test."""
+        with patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):
+            example = load_example("02_langchain_integration.py")
+
+        self.assertTrue(example.demo_client.is_mock_mode)
+        guarded_delete, guarded_list = example.build_guarded_tools()
+
+        self.assertIn("app.py", guarded_list.invoke({"path": "/workspace"}))
+
+        def unexpected_evaluation(*_args, **_kwargs):
+            raise AssertionError("Fast-Deny must run before the evaluator")
+
+        example.demo_client.evaluate_context = unexpected_evaluation
+        with self.assertRaises(SecurityViolationError) as error:
+            guarded_delete.invoke({"bucket_name": "prod-backups", "force": True})
+        self.assertEqual(error.exception.rule_result.outcome, RuleOutcome.DENY)
+        self.assertFalse(error.exception.decision.network_called)
+
+    def test_custom_client_example_keeps_the_demo_offline_and_guarded(self):
+        with patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):
+            example = load_example("03_custom_client.py")
+
+        self.assertTrue(example.enterprise_client.is_mock_mode)
+        self.assertEqual(
+            example.modify_user_role(1001, "superuser_admin"),
+            "User 1001 set to superuser_admin",
+        )
+
     def test_prompt_calibration_example_aggregates_each_candidate_separately(self):
         path = ROOT / "examples" / "09_live_multi_agent_prompt_calibration_eval.py"
         self.assertTrue(path.is_file())

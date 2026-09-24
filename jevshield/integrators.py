@@ -1,5 +1,6 @@
 import functools
-from typing import Any
+from typing import Any, Optional
+from .client import JevClient
 from .decorators import guard
 from .models import Policy
 
@@ -8,6 +9,7 @@ def guard_langchain_tool(
     tool: Any,
     *,
     policy: Policy,
+    client: Optional[JevClient] = None,
 ):
     """
     Patches both sync (_run) and async (_arun) invocations of a LangChain BaseTool.
@@ -31,6 +33,7 @@ def guard_langchain_tool(
     run_impl.__doc__ = getattr(tool, "description", None)
     tool._run = guard(
         policy=policy,
+        client=client,
     )(run_impl)
 
     if original_arun is not None:
@@ -42,6 +45,7 @@ def guard_langchain_tool(
         arun_impl.__doc__ = getattr(tool, "description", None)
         tool._arun = guard(
             policy=policy,
+            client=client,
         )(arun_impl)
 
     return tool
