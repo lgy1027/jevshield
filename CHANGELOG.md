@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Policy-based guard configuration with `DevelopmentPolicy`, `StagingPolicy`, and fail-closed `ProductionPolicy` defaults.
 * Fast-Deny local rules, structurally framed evaluator context, pre-evaluation and audit redaction, bounded confirmation, and redacted audit hooks.
 * Framework-independent `LoopTerminator` with local iteration, repeated-call, stagnant-observation, and cumulative-budget limits.
+* Framework-independent `IntentClassifier`, `Router`, `HandoffTracker`, and
+  optional `LoopReviewer` controls for application-owned Agent and RAG flows.
+* Credential-free minimal Agent example, live Agent/RAG demonstrations, and
+  bounded routing, handoff, and prompt-calibration evaluations.
 
 ### Changed
 
@@ -19,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Headless `ASK` decisions without an explicit confirmer, approval timeouts, and confirmation failures now deny deterministically.
 * `guard` and `guard_langchain_tool` are now policy-first APIs: `policy=` is required and legacy decorator keywords are not accepted.
 * Added `JEV_TIMEOUT_SECONDS` as the environment-configurable default HTTP timeout; explicit `JevClient(timeout=...)` values take precedence.
+* LangChain and legacy examples now use the policy-first API; guarded LangChain
+  Tool builders create fresh Tool instances rather than stacking wrappers.
 
 ## [0.1.1] - 2026-09-20
 

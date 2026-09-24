@@ -1,19 +1,35 @@
 # JevShield 🛡️
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.1-blue.svg)](https://pypi.org/)
+[![PyPI version](https://img.shields.io/pypi/v/jevshield.svg)](https://pypi.org/project/jevshield/)
+[![CI](https://github.com/lgy1027/jevshield/actions/workflows/ci.yml/badge.svg)](https://github.com/lgy1027/jevshield/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
-**A framework-agnostic decision-control SDK for AI agents powered by Jev (System-1 Models).**
+**Framework-agnostic decision control for AI Agent routing and tool execution, powered by Jev (System-1 Models).**
 
-`jevshield` provides typed decision primitives for classifying requests and
-selecting application routes. Its Guard remains the execution-time security
-layer: a protected operation is evaluated before it is invoked and dangerous
-operations can be denied.
+Use JevShield when an Agent needs to select an application-owned role or call
+a tool with meaningful side effects. Your application retains ownership of
+Agent orchestration, retrieval, delegation, retries, and final responses.
+JevShield is not an Agent runtime, retriever, or workflow engine.
 
 * **Typed decisions** use explicit Choice results and statuses.
 * **Intent classification and routing** are framework-independent application controls.
 * **Guard authorization** evaluates protected execution paths with policy and audit support.
+
+---
+
+## Contents
+
+- [Quick Start](#quick-start)
+- [Security Posture](#security-posture)
+- [Supported Providers & Gateway Endpoints](#supported-providers--gateway-endpoints)
+- [LangChain Integration](#langchain-integration)
+- [Typed Intent Classification](#typed-intent-classification)
+- [Route Before Tool Exposure](#route-before-tool-exposure)
+- [Optional Multi-Agent and Loop Controls](#optional-local-multi-agent-handoff-control)
+- [Development-only Live Demonstrations](#development-only-live-demonstrations)
+- [Advanced: Manual Jev Evaluation Suites](#advanced-manual-jev-evaluation-suites)
+- [Project](#project)
 
 ---
 
@@ -27,7 +43,7 @@ operations can be denied.
 
 ## Quick Start
 
-### 1. Installation
+### Use the SDK
 
 ```bash
 pip install jevshield
@@ -39,7 +55,7 @@ For LangChain tool integrations:
 pip install "jevshield[langchain]"
 ```
 
-### Choose an example
+### Run the first example from a source checkout
 
 The example files live in the source checkout. Clone it and install the
 checkout before running them:
@@ -48,14 +64,16 @@ checkout before running them:
 git clone https://github.com/lgy1027/jevshield.git
 cd jevshield
 python -m pip install -e .
+python examples/00_minimal_agent.py
 ```
 
-Then start with the fully runnable, credential-free
-[minimal Agent example](examples/00_minimal_agent.py). The
+This credential-free [minimal Agent example](examples/00_minimal_agent.py)
+shows the complete host-owned path: route selection, explicit role invocation,
+and a Guard-protected tool boundary. The
 [examples guide](examples/README.md) separates first-run examples from real
 Jev demonstrations and development-only evaluations.
 
-### 2. Minimal Agent Integration (Recommended)
+### Core Agent integration pattern
 
 JevShield is a pre-check layer, not an Agent runtime. Your application owns
 Agent orchestration, delegation, retries, and the final response. Use Jev to
@@ -92,7 +110,7 @@ This is the default integration path. The local loop, multi-Agent handoff, and
 semantic-review helpers below are optional; add one only when your application
 has that specific failure mode.
 
-### 3. Guarded Tool Usage (Sync & Async)
+### Guarded tool usage (sync and async)
 
 ```python
 from jevshield import ProductionPolicy, SecurityViolationError, guard
@@ -269,78 +287,6 @@ If neither key is present, development and staging policies run in
 **Deterministic Heuristic Fallback Mode**, which is useful for test suites and
 Docker builds. `ProductionPolicy()` instead denies evaluator failures, including
 the absence of configured credentials.
-
-## Manual Jev Evaluation Suites
-
-The checked-in `classify`, `route`, `route_high_risk`,
-`route_security_holdout`, and `guard_intent_consistency` corpora can be run
-manually against a configured Jev provider. They are opt-in: normal unit tests
-use a recording decision client and never make live requests. Store a local
-credential as `JEV_API_KEY` in the ignored project-root `.env` file (or set it
-in your shell), then run:
-
-```bash
-JEV_API_KEY="your-local-key" python -m evals.run --suite all
-```
-
-Choose one corpus with `--suite classify`, `--suite route`, `--suite
-route_high_risk`, `--suite route_security_holdout`, or `--suite
-guard_intent_consistency`; optionally write the redacted JSON result somewhere
-else with `--report-dir PATH` and reject lower-confidence decisions with
-`--min-confidence FLOAT` (from 0 to 1).
-`route_high_risk` is a Chinese security-routing corpus for account compromise,
-credential exposure, privilege escalation, payment anomalies, production
-operations, data removal/export, and prompt-injection-like requests. Every case
-must resolve to `security_review`.
-`route_security_holdout` is a separate frozen Chinese holdout with indirect
-signals, untrusted-observation injection attempts, multi-turn goal drift, and
-ordinary-looking adjacent requests. Do not tune route candidate descriptions
-against holdout results. Both security corpora fail a resolved selection that is
-not `security_review` and reject cases missing that candidate.
-ordinary `human` handling is deliberately a distinct, failing outcome. For
-example:
-
-```bash
-python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
-
-# Run the security-only routing corpus.
-python -m evals.run --suite route_high_risk
-
-# Run the separate frozen security holdout.
-python -m evals.run --suite route_security_holdout
-
-# Exercise trusted-objective versus observed-invocation enforcement.
-python -m evals.run --suite guard_intent_consistency
-```
-
-The intent-consistency suite is framework-free: it passes each trusted objective
-through `IntentClassifier` and each proposed tool invocation through `guard`
-and `IntentPolicy`, without LangChain or another agent runtime. Its protected
-function is a harmless in-memory marker. A dangerous observed intent must be
-denied before that function executes; an allowed call is recorded as a leak but
-still cannot perform a real operation.
-
-The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
-against the OpenRouter System One endpoint, select that backend explicitly while
-using the local key:
-
-```bash
-# JEV_API_KEY is read from the ignored .env file.
-JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
-```
-
-The command prints aggregate outcome counts and the report path only. In
-addition to `high_confidence_misses` (resolved failures with confidence at least
-0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
-`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
-safe decision outcomes/metrics—never trusted objectives, tool metadata,
-arguments, candidate descriptions, gateway output, or credentials. Keep their
-destination private as a sensible operational precaution. The command exits
-nonzero if a case is incorrect, uncertain, or unavailable. These evaluations
-measure behavior on a bounded checked-in corpus; they do not prove general
-safety or correctness for all prompts and workloads.
-
----
 
 ## LangChain Integration
 
@@ -618,11 +564,78 @@ prompt and role-description candidates over ten runs each. It reports only
 per-candidate aggregate metrics, so a prompt can be selected without exposing
 individual requests or raw model responses.
 
+## Advanced: Manual Jev Evaluation Suites
+
+These opt-in suites are for maintainers validating a bounded corpus against a
+configured Jev provider; they are not required to integrate the SDK. Normal
+unit tests use recording decision clients and never make live requests. Store a
+local credential as `JEV_API_KEY` in the ignored project-root `.env` file (or
+set it in your shell), then run:
+
+```bash
+JEV_API_KEY="your-local-key" python -m evals.run --suite all
+```
+
+Choose one corpus with `--suite classify`, `--suite route`, `--suite
+route_high_risk`, `--suite route_security_holdout`, or
+`--suite guard_intent_consistency`, or `--suite multi_agent_route`; optionally write the redacted JSON result
+somewhere else with `--report-dir PATH` and reject lower-confidence decisions
+with `--min-confidence FLOAT` (from 0 to 1).
+
+`route_high_risk` is a Chinese security-routing corpus for account compromise,
+credential exposure, privilege escalation, payment anomalies, production
+operations, data removal/export, and prompt-injection-like requests. Every case
+must resolve to `security_review`. `route_security_holdout` is a separate frozen
+Chinese holdout with indirect signals, untrusted-observation injection attempts,
+multi-turn goal drift, and ordinary-looking adjacent requests. Do not tune route
+candidate descriptions against holdout results. Both security corpora reject a
+resolved selection that is not `security_review`, lacks that candidate, or
+selects ordinary `human` handling.
+
+For example:
+
+```bash
+python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
+python -m evals.run --suite route_high_risk
+python -m evals.run --suite route_security_holdout
+python -m evals.run --suite guard_intent_consistency
+python -m evals.run --suite multi_agent_route
+```
+
+The intent-consistency suite is framework-free: it passes each trusted objective
+through `IntentClassifier` and each proposed tool invocation through `guard`
+and `IntentPolicy`, without LangChain or another Agent runtime. Its protected
+function is a harmless in-memory marker. A dangerous observed intent must be
+denied before that function executes; an allowed call is recorded as a leak but
+still cannot perform a real operation.
+
+The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
+against the OpenRouter System One endpoint, select that backend explicitly:
+
+```bash
+JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
+```
+
+The command prints aggregate outcome counts and the report path only. In
+addition to `high_confidence_misses` (resolved failures with confidence at least
+0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
+`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
+safe decision outcomes/metrics—never trusted objectives, tool metadata,
+arguments, candidate descriptions, gateway output, or credentials. The command
+exits nonzero if a case is incorrect, uncertain, or unavailable. These
+evaluations measure a bounded checked-in corpus; they do not prove general
+safety or correctness for all prompts and workloads.
+
 ---
 
-## License
+## Project
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for details.
+- [Contributing](CONTRIBUTING.md)
+- [Security vulnerability reporting](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE)
+
+JevShield is licensed under the **Apache License, Version 2.0**.
 
 ## Disclaimer
 
