@@ -534,6 +534,7 @@ python examples/04_live_agent_loop.py
 python examples/05_live_rag_checkpoint.py
 python examples/06_live_loop_review_eval.py
 python examples/07_live_multi_agent_handoff_eval.py
+python examples/08_live_multi_agent_handoff_stability_eval.py
 ```
 
 `04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
@@ -552,6 +553,10 @@ termination control; ordinary unit tests never invoke this network path.
 Jev, records an explicit child return between the two delegations, and reports
 only aggregate route and handoff outcomes. It never invokes a child Agent or a
 tool, and ordinary unit tests never invoke its network path.
+
+`08_live_multi_agent_handoff_stability_eval.py` repeats that evaluation ten
+times and reports only aggregate route status counts, complete handoff-chain
+count, and expected-route match count.
 
 ---
 

@@ -60,17 +60,24 @@ def run_live_evaluation(client):
     route_statuses = Counter()
     handoff_actions = Counter()
     handoff_count = 0
+    expected_route_matches = 0
 
     first = router.select({"request": REQUESTS[0]})
     route_statuses[first.status.value] += 1
+    if first.route_key == "research":
+        expected_route_matches += 1
     if first.route_key is None:
-        return _report(route_statuses, handoff_actions, handoff_count)
+        return _report(
+            route_statuses, handoff_actions, handoff_count, expected_route_matches
+        )
 
     delegated = tracker.delegate("main", first.route_key)
     handoff_count = delegated.handoff_count
     handoff_actions[delegated.action.value] += 1
     if delegated.action is not HandoffAction.CONTINUE:
-        return _report(route_statuses, handoff_actions, handoff_count)
+        return _report(
+            route_statuses, handoff_actions, handoff_count, expected_route_matches
+        )
 
     returned = tracker.return_to_parent(first.route_key, "main")
     handoff_count = returned.handoff_count
@@ -78,16 +85,22 @@ def run_live_evaluation(client):
 
     second = router.select({"request": REQUESTS[1]})
     route_statuses[second.status.value] += 1
+    if second.route_key == "coding":
+        expected_route_matches += 1
     if second.route_key is None:
-        return _report(route_statuses, handoff_actions, handoff_count)
+        return _report(
+            route_statuses, handoff_actions, handoff_count, expected_route_matches
+        )
 
     delegated = tracker.delegate("main", second.route_key)
     handoff_count = delegated.handoff_count
     handoff_actions[delegated.action.value] += 1
-    return _report(route_statuses, handoff_actions, handoff_count)
+    return _report(
+        route_statuses, handoff_actions, handoff_count, expected_route_matches
+    )
 
 
-def _report(route_statuses, handoff_actions, handoff_count):
+def _report(route_statuses, handoff_actions, handoff_count, expected_route_matches):
     """Return aggregate-only data suitable for a live example's stdout."""
 
     return {
@@ -95,6 +108,8 @@ def _report(route_statuses, handoff_actions, handoff_count):
         "route_status_counts": dict(sorted(route_statuses.items())),
         "handoff_action_counts": dict(sorted(handoff_actions.items())),
         "handoff_count": handoff_count,
+        "expected_route_matches": expected_route_matches,
+        "full_chain_completed": handoff_count == len(REQUESTS),
     }
 
 

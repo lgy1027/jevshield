@@ -49,6 +49,45 @@ def resolved(action, reason="reviewed"):
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_multi_agent_handoff_stability_example_aggregates_safe_run_reports(self):
+        path = ROOT / "examples" / "08_live_multi_agent_handoff_stability_eval.py"
+        self.assertTrue(path.is_file())
+        example = load_example(path.name)
+        reports = iter(
+            (
+                {
+                    "route_total": 2,
+                    "route_status_counts": {"resolved": 2},
+                    "handoff_action_counts": {"continue": 3},
+                    "handoff_count": 2,
+                    "expected_route_matches": 2,
+                    "full_chain_completed": True,
+                },
+                {
+                    "route_total": 1,
+                    "route_status_counts": {"uncertain": 1},
+                    "handoff_action_counts": {},
+                    "handoff_count": 0,
+                    "expected_route_matches": 0,
+                    "full_chain_completed": False,
+                },
+            )
+        )
+
+        report = example.run_stability_evaluation(lambda: next(reports), runs=2)
+
+        self.assertEqual(
+            report,
+            {
+                "runs": 2,
+                "route_total": 3,
+                "route_status_counts": {"resolved": 2, "uncertain": 1},
+                "handoff_action_counts": {"continue": 3},
+                "full_chain_count": 1,
+                "expected_route_matches": 2,
+            },
+        )
+
     def test_multi_agent_handoff_example_exposes_a_safe_aggregator(self):
         path = ROOT / "examples" / "07_live_multi_agent_handoff_eval.py"
         self.assertTrue(path.is_file())
@@ -62,12 +101,21 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
 
         self.assertEqual(
             set(report),
-            {"route_total", "route_status_counts", "handoff_action_counts", "handoff_count"},
+            {
+                "route_total",
+                "route_status_counts",
+                "handoff_action_counts",
+                "handoff_count",
+                "expected_route_matches",
+                "full_chain_completed",
+            },
         )
         self.assertEqual(report["route_total"], 2)
         self.assertEqual(report["route_status_counts"], {"resolved": 2})
         self.assertEqual(report["handoff_action_counts"], {"continue": 3})
         self.assertEqual(report["handoff_count"], 2)
+        self.assertEqual(report["expected_route_matches"], 2)
+        self.assertTrue(report["full_chain_completed"])
         self.assertEqual(len(client.states), 2)
         self.assertNotIn("delivery policy", repr(report).lower())
 
@@ -92,6 +140,8 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
         self.assertEqual(report["route_status_counts"], {"uncertain": 1})
         self.assertEqual(report["handoff_action_counts"], {})
         self.assertEqual(report["handoff_count"], 0)
+        self.assertEqual(report["expected_route_matches"], 0)
+        self.assertFalse(report["full_chain_completed"])
         self.assertEqual(len(client.states), 1)
         self.assertNotIn("raw-route-reason-must-not-escape", repr(report))
 
@@ -119,6 +169,8 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
         )
         self.assertEqual(report["handoff_action_counts"], {"continue": 2})
         self.assertEqual(report["handoff_count"], 1)
+        self.assertEqual(report["expected_route_matches"], 1)
+        self.assertFalse(report["full_chain_completed"])
         self.assertEqual(len(client.states), 2)
         self.assertNotIn("raw-unavailable-reason-must-not-escape", repr(report))
 
