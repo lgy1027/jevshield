@@ -1,19 +1,35 @@
 # JevShield 🛡️
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.1-blue.svg)](https://pypi.org/)
+[![PyPI version](https://img.shields.io/pypi/v/jevshield.svg)](https://pypi.org/project/jevshield/)
+[![CI](https://github.com/lgy1027/jevshield/actions/workflows/ci.yml/badge.svg)](https://github.com/lgy1027/jevshield/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
-**A framework-agnostic decision-control SDK for AI agents powered by Jev (System-1 Models).**
+**Framework-agnostic decision control for AI Agent routing and tool execution, powered by Jev (System-1 Models).**
 
-`jevshield` provides typed decision primitives for classifying requests and
-selecting application routes. Its Guard remains the execution-time security
-layer: a protected operation is evaluated before it is invoked and dangerous
-operations can be denied.
+Use JevShield when an Agent needs to select an application-owned role or call
+a tool with meaningful side effects. Your application retains ownership of
+Agent orchestration, retrieval, delegation, retries, and final responses.
+JevShield is not an Agent runtime, retriever, or workflow engine.
 
 * **Typed decisions** use explicit Choice results and statuses.
 * **Intent classification and routing** are framework-independent application controls.
 * **Guard authorization** evaluates protected execution paths with policy and audit support.
+
+---
+
+## Contents
+
+- [Quick Start](#quick-start)
+- [Security Posture](#security-posture)
+- [Supported Providers & Gateway Endpoints](#supported-providers--gateway-endpoints)
+- [LangChain Integration](#langchain-integration)
+- [Typed Intent Classification](#typed-intent-classification)
+- [Route Before Tool Exposure](#route-before-tool-exposure)
+- [Optional Multi-Agent and Loop Controls](#optional-local-multi-agent-handoff-control)
+- [Development-only Live Demonstrations](#development-only-live-demonstrations)
+- [Advanced: Manual Jev Evaluation Suites](#advanced-manual-jev-evaluation-suites)
+- [Project](#project)
 
 ---
 
@@ -27,7 +43,7 @@ operations can be denied.
 
 ## Quick Start
 
-### 1. Installation
+### Use the SDK
 
 ```bash
 pip install jevshield
@@ -39,7 +55,62 @@ For LangChain tool integrations:
 pip install "jevshield[langchain]"
 ```
 
-### 2. Basic Decorator Usage (Sync & Async)
+### Run the first example from a source checkout
+
+The example files live in the source checkout. Clone it and install the
+checkout before running them:
+
+```bash
+git clone https://github.com/lgy1027/jevshield.git
+cd jevshield
+python -m pip install -e .
+python examples/00_minimal_agent.py
+```
+
+This credential-free [minimal Agent example](examples/00_minimal_agent.py)
+shows the complete host-owned path: route selection, explicit role invocation,
+and a Guard-protected tool boundary. The
+[examples guide](examples/README.md) separates first-run examples from real
+Jev demonstrations and development-only evaluations.
+
+### Core Agent integration pattern
+
+JevShield is a pre-check layer, not an Agent runtime. Your application owns
+Agent orchestration, delegation, retries, and the final response. Use Jev to
+select a role before your code calls it, then protect any real tool at the
+execution boundary.
+
+```python
+from jevshield import DecisionStatus, JevClient, ProductionPolicy, Route, Router, guard
+
+client = JevClient(api_key="ts-...")
+
+router = Router(
+    {
+        "research": Route("Find facts in approved sources.", run_research_agent),
+        "coding": Route("Implement source-code changes.", run_coding_agent),
+    },
+    client=client,
+    min_confidence=0.7,
+)
+
+
+@guard(policy=ProductionPolicy(), client=client)
+def write_change(path: str, content: str):
+    return application_write(path, content)
+
+
+selection = router.select({"request": user_request})
+if selection.status is DecisionStatus.RESOLVED and selection.target is not None:
+    return selection.target(user_request)  # Your code owns this invocation.
+return ask_for_clarification_or_retry_later(selection.status)
+```
+
+This is the default integration path. The local loop, multi-Agent handoff, and
+semantic-review helpers below are optional; add one only when your application
+has that specific failure mode.
+
+### Guarded tool usage (sync and async)
 
 ```python
 from jevshield import ProductionPolicy, SecurityViolationError, guard
@@ -217,78 +288,6 @@ If neither key is present, development and staging policies run in
 Docker builds. `ProductionPolicy()` instead denies evaluator failures, including
 the absence of configured credentials.
 
-## Manual Jev Evaluation Suites
-
-The checked-in `classify`, `route`, `route_high_risk`,
-`route_security_holdout`, and `guard_intent_consistency` corpora can be run
-manually against a configured Jev provider. They are opt-in: normal unit tests
-use a recording decision client and never make live requests. Store a local
-credential as `JEV_API_KEY` in the ignored project-root `.env` file (or set it
-in your shell), then run:
-
-```bash
-JEV_API_KEY="your-local-key" python -m evals.run --suite all
-```
-
-Choose one corpus with `--suite classify`, `--suite route`, `--suite
-route_high_risk`, `--suite route_security_holdout`, or `--suite
-guard_intent_consistency`; optionally write the redacted JSON result somewhere
-else with `--report-dir PATH` and reject lower-confidence decisions with
-`--min-confidence FLOAT` (from 0 to 1).
-`route_high_risk` is a Chinese security-routing corpus for account compromise,
-credential exposure, privilege escalation, payment anomalies, production
-operations, data removal/export, and prompt-injection-like requests. Every case
-must resolve to `security_review`.
-`route_security_holdout` is a separate frozen Chinese holdout with indirect
-signals, untrusted-observation injection attempts, multi-turn goal drift, and
-ordinary-looking adjacent requests. Do not tune route candidate descriptions
-against holdout results. Both security corpora fail a resolved selection that is
-not `security_review` and reject cases missing that candidate.
-ordinary `human` handling is deliberately a distinct, failing outcome. For
-example:
-
-```bash
-python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
-
-# Run the security-only routing corpus.
-python -m evals.run --suite route_high_risk
-
-# Run the separate frozen security holdout.
-python -m evals.run --suite route_security_holdout
-
-# Exercise trusted-objective versus observed-invocation enforcement.
-python -m evals.run --suite guard_intent_consistency
-```
-
-The intent-consistency suite is framework-free: it passes each trusted objective
-through `IntentClassifier` and each proposed tool invocation through `guard`
-and `IntentPolicy`, without LangChain or another agent runtime. Its protected
-function is a harmless in-memory marker. A dangerous observed intent must be
-denied before that function executes; an allowed call is recorded as a leak but
-still cannot perform a real operation.
-
-The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
-against the OpenRouter System One endpoint, select that backend explicitly while
-using the local key:
-
-```bash
-# JEV_API_KEY is read from the ignored .env file.
-JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
-```
-
-The command prints aggregate outcome counts and the report path only. In
-addition to `high_confidence_misses` (resolved failures with confidence at least
-0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
-`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
-safe decision outcomes/metrics—never trusted objectives, tool metadata,
-arguments, candidate descriptions, gateway output, or credentials. Keep their
-destination private as a sensible operational precaution. The command exits
-nonzero if a case is incorrect, uncertain, or unavailable. These evaluations
-measure behavior on a bounded checked-in corpus; they do not prove general
-safety or correctness for all prompts and workloads.
-
----
-
 ## LangChain Integration
 
 ```python
@@ -395,7 +394,36 @@ def cancel_order(order_id: str) -> str:
     return orders_api.cancel(order_id)
 ```
 
-## Local Agent Loop Termination
+## Optional: Local Multi-Agent Handoff Control
+
+`HandoffTracker` is an optional local limit around application-owned Agent
+delegation. It does not route, invoke an Agent, call Jev, or authorize a tool.
+Use `delegate()` when a parent delegates to a child, and `return_to_parent()`
+when that child completes. Returns do not consume the delegation budget.
+The tracker returns `human_escalation` when delegation reaches its budget,
+repeats the same delegation, or would revisit a role that is still active in
+the delegation stack.
+
+```python
+from jevshield import HandoffAction, HandoffPolicy, HandoffTracker
+
+handoffs = HandoffTracker(HandoffPolicy(max_handoffs=4))
+
+decision = handoffs.delegate("main", "research")
+if decision.action is HandoffAction.HUMAN_ESCALATION:
+    return request_human_help(decision.reason)
+
+research_result = run_research_agent()
+handoffs.return_to_parent("research", "main")
+```
+
+Call `reset()` before reusing a tracker for a different top-level task. Role
+identifiers are opaque strings; keep task content and tool inputs out of this
+local control record. The older `observe(source, target)` entry point remains
+as a deprecated alias for one-way `delegate(source, target)` calls; use the
+explicit methods when child results return to their parent.
+
+## Optional: Local Agent Loop Controls
 
 `LoopTerminator` is an optional, framework-independent local control for
 stopping retry loops. It does not evaluate tools, authorize execution, or call
@@ -426,11 +454,188 @@ success. `max_budget` accepts a cumulative host-defined budget; it cannot
 decrease within a loop. Set `stall_action=LoopAction.ASK_FOR_HELP` when the
 host can hand stalled work to an operator or a higher-level workflow.
 
+### Plain-Python Agent composition
+
+Keep deterministic limits authoritative: call `observe()` after each completed
+iteration and return every non-`continue` local decision before consulting a
+semantic reviewer. The application, not JevShield, chooses the checkpoints at
+which semantic review is useful.
+
+```python
+from jevshield import (
+    LoopAction,
+    LoopReviewInput,
+    LoopReviewer,
+)
+
+reviewer = LoopReviewer(decision_client, min_confidence=0.7)
+
+
+def review_agent_iteration(step, *, checkpoint=None, safe_summaries=()):
+    local = terminator.observe(step)
+    if local.action is not LoopAction.CONTINUE:
+        return local
+
+    if checkpoint is None:  # No application-selected semantic checkpoint.
+        return None
+
+    reviewed = reviewer.review(
+        LoopReviewInput(
+            trusted_objective="Answer from approved evidence.",
+            checkpoint=checkpoint,
+            iteration=local.iteration,
+            step_summaries=safe_summaries,
+        )
+    )
+    if reviewed.action is not None:
+        return reviewed
+    return None  # The host chooses an explicit uncertain/unavailable fallback.
+```
+
+### Plain-Python RAG composition
+
+At a retrieval or evidence checkpoint, summarize only the progress needed for
+the decision. Pass safe retrieval/evidence summaries, never raw documents,
+retriever results, vector-store records, or framework objects.
+
+```python
+local = terminator.observe(completed_retrieval_step)
+if local.action is not LoopAction.CONTINUE:
+    return handle_loop_decision(local)
+
+if evidence_checkpoint_reached:
+    reviewed = reviewer.review(
+        LoopReviewInput(
+            trusted_objective="Answer only from retrieved evidence.",
+            checkpoint="evidence_insufficient",
+            iteration=local.iteration,
+            step_summaries=("retrieval added no supporting source",),
+            evidence_summary="Available sources do not support an answer.",
+        )
+    )
+    if reviewed.action is not None:
+        return handle_review_action(reviewed.action)
+```
+
+`LoopReviewer` recommends loop control only. It does not authorize or execute
+tools, so Guard remains mandatory immediately before every tool execution.
+
+### Development-only live demonstrations
+
+The two runnable examples exercise the public APIs against a real Jev service;
+they are intentionally small application-owned flows, not a general Agent or
+RAG framework. Export a real credential first (the examples do not load a
+`.env` file automatically):
+
+```bash
+export JEV_API_KEY="your-key"
+python examples/04_live_agent_loop.py
+python examples/05_live_rag_checkpoint.py
+python examples/06_live_loop_review_eval.py
+python examples/07_live_multi_agent_handoff_eval.py
+python examples/08_live_multi_agent_handoff_stability_eval.py
+python examples/09_live_multi_agent_prompt_calibration_eval.py
+```
+
+`04_live_agent_loop.py` runs a safe guarded catalog lookup, applies local
+termination, then uses a semantic planning checkpoint. `05_live_rag_checkpoint.py`
+derives a short evidence summary from an in-memory corpus before its evidence
+checkpoint; it never sends source documents to the reviewer. Both print only a
+typed status and action. An `uncertain` or `unavailable` result with
+`action=none` is a valid service outcome that the host must handle explicitly.
+
+`06_live_loop_review_eval.py` is an opt-in three-checkpoint smoke evaluation
+for Agent planning, insufficient RAG evidence, and conflicting RAG evidence.
+It reports only aggregate status/action counts plus a deterministic local
+termination control; ordinary unit tests never invoke this network path.
+
+`07_live_multi_agent_handoff_eval.py` routes a main Agent twice through real
+Jev, records an explicit child return between the two delegations, and reports
+only aggregate route and handoff outcomes. It never invokes a child Agent or a
+tool. `08` and `09` are development-time stability and prompt-calibration
+evaluations; none of these scripts belong in the production request path.
+
+`08_live_multi_agent_handoff_stability_eval.py` repeats that evaluation ten
+times and reports only aggregate route status counts, complete handoff-chain
+count, and expected-route match count.
+
+`09_live_multi_agent_prompt_calibration_eval.py` compares three second-route
+prompt and role-description candidates over ten runs each. It reports only
+per-candidate aggregate metrics, so a prompt can be selected without exposing
+individual requests or raw model responses.
+
+## Advanced: Manual Jev Evaluation Suites
+
+These opt-in suites are for maintainers validating a bounded corpus against a
+configured Jev provider; they are not required to integrate the SDK. Normal
+unit tests use recording decision clients and never make live requests. Store a
+local credential as `JEV_API_KEY` in the ignored project-root `.env` file (or
+set it in your shell), then run:
+
+```bash
+JEV_API_KEY="your-local-key" python -m evals.run --suite all
+```
+
+Choose one corpus with `--suite classify`, `--suite route`, `--suite
+route_high_risk`, `--suite route_security_holdout`, or
+`--suite guard_intent_consistency`, or `--suite multi_agent_route`; optionally write the redacted JSON result
+somewhere else with `--report-dir PATH` and reject lower-confidence decisions
+with `--min-confidence FLOAT` (from 0 to 1).
+
+`route_high_risk` is a Chinese security-routing corpus for account compromise,
+credential exposure, privilege escalation, payment anomalies, production
+operations, data removal/export, and prompt-injection-like requests. Every case
+must resolve to `security_review`. `route_security_holdout` is a separate frozen
+Chinese holdout with indirect signals, untrusted-observation injection attempts,
+multi-turn goal drift, and ordinary-looking adjacent requests. Do not tune route
+candidate descriptions against holdout results. Both security corpora reject a
+resolved selection that is not `security_review`, lacks that candidate, or
+selects ordinary `human` handling.
+
+For example:
+
+```bash
+python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
+python -m evals.run --suite route_high_risk
+python -m evals.run --suite route_security_holdout
+python -m evals.run --suite guard_intent_consistency
+python -m evals.run --suite multi_agent_route
+```
+
+The intent-consistency suite is framework-free: it passes each trusted objective
+through `IntentClassifier` and each proposed tool invocation through `guard`
+and `IntentPolicy`, without LangChain or another Agent runtime. Its protected
+function is a harmless in-memory marker. A dangerous observed intent must be
+denied before that function executes; an allowed call is recorded as a leak but
+still cannot perform a real operation.
+
+The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
+against the OpenRouter System One endpoint, select that backend explicitly:
+
+```bash
+JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
+```
+
+The command prints aggregate outcome counts and the report path only. In
+addition to `high_confidence_misses` (resolved failures with confidence at least
+0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
+`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
+safe decision outcomes/metrics—never trusted objectives, tool metadata,
+arguments, candidate descriptions, gateway output, or credentials. The command
+exits nonzero if a case is incorrect, uncertain, or unavailable. These
+evaluations measure a bounded checked-in corpus; they do not prove general
+safety or correctness for all prompts and workloads.
+
 ---
 
-## License
+## Project
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for details.
+- [Contributing](CONTRIBUTING.md)
+- [Security vulnerability reporting](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE)
+
+JevShield is licensed under the **Apache License, Version 2.0**.
 
 ## Disclaimer
 

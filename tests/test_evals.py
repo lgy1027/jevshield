@@ -20,6 +20,7 @@ from evals.runner import (
     run_classify_suite,
     run_guard_intent_consistency_suite,
     run_high_risk_route_suite,
+    run_multi_agent_route_suite,
     run_route_suite,
     run_security_holdout_route_suite,
     write_report,
@@ -271,6 +272,25 @@ class TestGuardIntentConsistencySuite(unittest.TestCase):
 
 
 class TestEvalCaseLoader(unittest.TestCase):
+    def test_multi_agent_route_corpus_has_ten_fixed_roles(self):
+        corpus_path = (
+            Path(__file__).resolve().parents[1]
+            / "evals"
+            / "cases"
+            / "multi_agent_route.json"
+        )
+
+        cases = load_cases(corpus_path)
+
+        expected_roles = {
+            "research", "knowledge", "coding", "testing", "security",
+            "data_analysis", "operations", "customer_support", "planning",
+            "human_escalation",
+        }
+        self.assertEqual(len(cases), 10)
+        self.assertTrue(all(set(case.candidates) == expected_roles for case in cases))
+        self.assertEqual({case.expected for case in cases}, expected_roles)
+
     def test_high_risk_corpus_is_checked_in_and_requires_security_review(self):
         """Sensitive scenarios cannot be silently removed or routed to ordinary handling."""
         corpus_path = Path(__file__).resolve().parents[1] / "evals" / "cases" / "route_high_risk.json"
@@ -496,6 +516,25 @@ class TestEvalRunnerPrimitives(unittest.TestCase):
 
 
 class TestPublicDecisionSuites(unittest.TestCase):
+    def test_multi_agent_route_suite_uses_the_public_router(self):
+        cases = (
+            EvalCase(
+                "coding-task",
+                "修复这个 Python 测试失败并运行测试。",
+                {"coding": "Implement and debug code", "research": "Find external information"},
+                "coding",
+            ),
+        )
+        client = RecordingDecisionClient(
+            (ChoiceAnswer("coding", 0.9, DecisionStatus.RESOLVED, 1.0, "fake"),)
+        )
+
+        report = run_multi_agent_route_suite(cases, client, model="fake-model")
+
+        self.assertEqual(report.suite, "multi_agent_route")
+        self.assertEqual((report.total, report.passed), (1, 1))
+        self.assertEqual(client.calls[0][1].name, "route")
+
     def test_classify_suite_uses_public_classifier_and_separates_outcomes(self):
         """Wrong classification, uncertainty, and outages must not count as passes."""
         case_text = "Confidential request text must never appear in reports"
@@ -785,6 +824,7 @@ class TestEvalCli(unittest.TestCase):
         route_report = self._report("route")
         high_risk_report = self._report("route_high_risk")
         holdout_report = self._report("route_security_holdout")
+        multi_agent_report = self._report("multi_agent_route")
         guard_report = aggregate_report(
             suite="guard_intent_consistency",
             model="fake-model",
@@ -805,6 +845,8 @@ class TestEvalCli(unittest.TestCase):
         ) as high_risk, patch.object(
             run, "run_security_holdout_route_suite", return_value=holdout_report
         ) as holdout, patch.object(
+            run, "run_multi_agent_route_suite", return_value=multi_agent_report
+        ) as multi_agent, patch.object(
             run, "run_guard_intent_consistency_suite", return_value=guard_report
         ) as guard_suite, patch.object(
             run, "load_guard_intent_cases", return_value=()
@@ -818,9 +860,10 @@ class TestEvalCli(unittest.TestCase):
         route.assert_called_once()
         high_risk.assert_called_once()
         holdout.assert_called_once()
+        multi_agent.assert_called_once()
         guard_suite.assert_called_once()
         report = write.call_args.args[0]
-        self.assertEqual((report.suite, report.total, report.passed), ("all", 5, 5))
+        self.assertEqual((report.suite, report.total, report.passed), ("all", 6, 6))
         self.assertEqual(report.dangerous_calls_blocked, 1)
         self.assertEqual(write.call_args.args[1], Path(directory))
         self.assertEqual(client_type.return_value.close.call_count, 1)

@@ -1712,6 +1712,24 @@ class TestLangChainIntegration(unittest.TestCase):
         result = guarded.invoke({"path": "/var/log"})
         self.assertIn("/var/log", result)
 
+    def test_langchain_wrapper_uses_an_explicit_offline_client(self):
+        """An ambient key must not turn an explicitly offline wrapper into I/O."""
+        from jevshield import guard_langchain_tool
+
+        @self._tool_decorator()
+        def list_files(path: str):
+            """Lists files within a specified local filesystem directory."""
+            return f"Files at {path}: ['app.py']"
+
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):
+            client = JevClient(api_key="")
+            guarded = guard_langchain_tool(
+                list_files, policy=DevelopmentPolicy(), client=client
+            )
+
+        self.assertTrue(client.is_mock_mode)
+        self.assertIn("app.py", guarded.invoke({"path": "/workspace"}))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,20 +1,36 @@
 from langchain_core.tools import tool
-from jevshield import guard_langchain_tool, SecurityViolationError
+from jevshield import (
+    DevelopmentPolicy,
+    JevClient,
+    SecurityViolationError,
+    guard_langchain_tool,
+)
 
-@tool
+# Keep this runnable demo local even if the shell exports a real JEV_API_KEY.
+demo_client = JevClient(api_key="")
+
 def delete_s3_bucket(bucket_name: str, force: bool = False):
     """Permanently deletes an Amazon S3 storage bucket and all its contents."""
     return f"Bucket {bucket_name} dropped."
 
-@tool
 def list_files(path: str):
     """Lists files within a specified local filesystem directory."""
     return f"Files at {path}: ['app.py', 'README.md']"
 
+def build_guarded_tools():
+    """Wrap the two LangChain tools with the current policy-first API."""
+
+    policy = DevelopmentPolicy()
+    return (
+        guard_langchain_tool(
+            tool(delete_s3_bucket), policy=policy, client=demo_client
+        ),
+        guard_langchain_tool(tool(list_files), policy=policy, client=demo_client),
+    )
+
+
 if __name__ == "__main__":
-    # Wrap LangChain tools with 1-line middleware
-    guarded_delete = guard_langchain_tool(delete_s3_bucket, interactive=False)
-    guarded_list = guard_langchain_tool(list_files, interactive=False)
+    guarded_delete, guarded_list = build_guarded_tools()
 
     print("1. Running Safe Tool...")
     print(guarded_list.invoke({"path": "/home/user/repo"}))

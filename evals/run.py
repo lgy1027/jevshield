@@ -18,6 +18,7 @@ from .runner import (
     run_classify_suite,
     run_guard_intent_consistency_suite,
     run_high_risk_route_suite,
+    run_multi_agent_route_suite,
     run_route_suite,
     run_security_holdout_route_suite,
     write_report,
@@ -50,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
             "route_high_risk",
             "route_security_holdout",
             "guard_intent_consistency",
+            "multi_agent_route",
             "all",
         ),
         required=True,
@@ -72,6 +74,7 @@ def _run_suite(name: str, client: JevClient, min_confidence: float):
         "route_high_risk": run_high_risk_route_suite,
         "route_security_holdout": run_security_holdout_route_suite,
         "guard_intent_consistency": run_guard_intent_consistency_suite,
+        "multi_agent_route": run_multi_agent_route_suite,
     }[name]
     return runner(cases, client, model=client.model, min_confidence=min_confidence)
 
@@ -101,6 +104,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "route_high_risk",
                 "route_security_holdout",
                 "guard_intent_consistency",
+                "multi_agent_route",
             )
             if arguments.suite == "all"
             else (arguments.suite,)

@@ -6,7 +6,9 @@ from .intent import IntentAssessment, IntentPolicy, IntentStatus
 from .route import Route, RouteSelection, Router
 from .runtime import ChoiceAnswer, ChoiceQuestion, DecisionStatus
 from .integrators import guard_langchain_tool
+from .handoff import HandoffAction, HandoffDecision, HandoffPolicy, HandoffTracker
 from .loop import LoopAction, LoopDecision, LoopPolicy, LoopStep, LoopTerminator
+from .review import LoopReviewAction, LoopReviewDecision, LoopReviewer, LoopReviewInput
 from .models import (
     Action,
     DevelopmentPolicy,
@@ -29,6 +31,10 @@ __all__ = [
     "FailureMode",
     "GuardContext",
     "GuardDecision",
+    "HandoffAction",
+    "HandoffDecision",
+    "HandoffPolicy",
+    "HandoffTracker",
     "JevClient",
     "JevGuardError",
     "IntentClassifier",
@@ -39,6 +45,10 @@ __all__ = [
     "LoopAction",
     "LoopDecision",
     "LoopPolicy",
+    "LoopReviewAction",
+    "LoopReviewDecision",
+    "LoopReviewInput",
+    "LoopReviewer",
     "LoopStep",
     "LoopTerminator",
     "Policy",
