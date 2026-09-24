@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.2] - 2026-09-24
+
 ### Added
 
 * Policy-based guard configuration with `DevelopmentPolicy`, `StagingPolicy`, and fail-closed `ProductionPolicy` defaults.
