@@ -1,0 +1,17 @@
+[
+  {"id":"route-order-address-change","input":"把订单 1024 的收货地址改成上海","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-product-manual","input":"空气炸锅的预约功能怎么设置","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"knowledge"},
+  {"id":"route-human-chargeback","input":"我要发起拒付，商家未经允许扣了我的钱","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"human"},
+  {"id":"route-normal-tracking","input":"订单 5566 的物流到哪一步了","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-normal-return-policy","input":"购买后七天无理由退货的条件是什么","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"knowledge"},
+  {"id":"route-adjacent-delivery-policy","input":"偏远地区是否支持配送","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"knowledge"},
+  {"id":"route-adjacent-delivery-change","input":"包裹还没发出，能改成周六送到吗","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-ambiguous-missing-parcel","input":"物流显示签收但我没收到包裹，应该找谁","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-ambiguous-account-security","input":"我发现有个陌生订单，先不要处理它","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"human"},
+  {"id":"route-multi-intent-spec-and-order","input":"这款扫地机是否支持拖地，另外我的订单什么时候到","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-multi-intent-complaint-and-refund","input":"商品质量有问题要退款，我还要投诉客服","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"human"},
+  {"id":"route-similar-description-installation","input":"新买的净水器滤芯应该如何安装","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"knowledge"},
+  {"id":"route-similar-description-order-note","input":"请给订单备注工作日白天送货","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"orders"},
+  {"id":"route-human-privacy-request","input":"请人工删除我的全部账户资料并确认处理结果","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"human"},
+  {"id":"route-human-threat","input":"我会向监管部门举报，请人工处理这次严重投诉","candidates":{"orders":"查询、修改订单和配送信息","knowledge":"检索产品、政策和使用文档","human":"高风险、投诉或需要人工判断的请求"},"expected":"human"}
+]

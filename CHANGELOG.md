@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Policy-based guard configuration with `DevelopmentPolicy`, `StagingPolicy`, and fail-closed `ProductionPolicy` defaults.
 * Fast-Deny local rules, structurally framed evaluator context, pre-evaluation and audit redaction, bounded confirmation, and redacted audit hooks.
+* Framework-independent `LoopTerminator` with local iteration, repeated-call, stagnant-observation, and cumulative-budget limits.
 
 ### Changed
 

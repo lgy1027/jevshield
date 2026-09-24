@@ -4,15 +4,16 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Versions](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 
-**Framework-agnostic runtime security gate for AI Agents powered by Jev (System-1 Models).**
+**A framework-agnostic decision-control SDK for AI agents powered by Jev (System-1 Models).**
 
-Traditional LLM guardrails rely on slow, autoregressive generation: calling GPT-4o or Claude to review an action can take 1.5 to 4 seconds, burn thousands of output tokens, and occasionally fail due to JSON parsing syntax errors.
+`jevshield` provides typed decision primitives for classifying requests and
+selecting application routes. Its Guard remains the execution-time security
+layer: a protected operation is evaluated before it is invoked and dangerous
+operations can be denied.
 
-`jevshield` cuts out the conversational fluff. By taking advantage of **TypeSafe AI's Jev model**, it performs single-pass, typed evaluations directly on logits:
-* **Zero Output Token Billing** (Jev charges $0 for output generation).
-* **Typed single-pass evaluation** via prefill logits readout.
-* **Dual-Validation Matrix**: Cross-evaluates **Severity Tier (Choice)** with **Irreversibility Probability (Noul/Boolean)** to eliminate false alarms.
-* **Zero-Config Local Fallback**: Instant local heuristic evaluation out of the box when no API key is provided.
+* **Typed decisions** use explicit Choice results and statuses.
+* **Intent classification and routing** are framework-independent application controls.
+* **Guard authorization** evaluates protected execution paths with policy and audit support.
 
 ---
 
@@ -216,6 +217,76 @@ If neither key is present, development and staging policies run in
 Docker builds. `ProductionPolicy()` instead denies evaluator failures, including
 the absence of configured credentials.
 
+## Manual Jev Evaluation Suites
+
+The checked-in `classify`, `route`, `route_high_risk`,
+`route_security_holdout`, and `guard_intent_consistency` corpora can be run
+manually against a configured Jev provider. They are opt-in: normal unit tests
+use a recording decision client and never make live requests. Store a local
+credential as `JEV_API_KEY` in the ignored project-root `.env` file (or set it
+in your shell), then run:
+
+```bash
+JEV_API_KEY="your-local-key" python -m evals.run --suite all
+```
+
+Choose one corpus with `--suite classify`, `--suite route`, `--suite
+route_high_risk`, `--suite route_security_holdout`, or `--suite
+guard_intent_consistency`; optionally write the redacted JSON result somewhere
+else with `--report-dir PATH` and reject lower-confidence decisions with
+`--min-confidence FLOAT` (from 0 to 1).
+`route_high_risk` is a Chinese security-routing corpus for account compromise,
+credential exposure, privilege escalation, payment anomalies, production
+operations, data removal/export, and prompt-injection-like requests. Every case
+must resolve to `security_review`.
+`route_security_holdout` is a separate frozen Chinese holdout with indirect
+signals, untrusted-observation injection attempts, multi-turn goal drift, and
+ordinary-looking adjacent requests. Do not tune route candidate descriptions
+against holdout results. Both security corpora fail a resolved selection that is
+not `security_review` and reject cases missing that candidate.
+ordinary `human` handling is deliberately a distinct, failing outcome. For
+example:
+
+```bash
+python -m evals.run --suite classify --report-dir ./local-eval-reports --min-confidence 0.8
+
+# Run the security-only routing corpus.
+python -m evals.run --suite route_high_risk
+
+# Run the separate frozen security holdout.
+python -m evals.run --suite route_security_holdout
+
+# Exercise trusted-objective versus observed-invocation enforcement.
+python -m evals.run --suite guard_intent_consistency
+```
+
+The intent-consistency suite is framework-free: it passes each trusted objective
+through `IntentClassifier` and each proposed tool invocation through `guard`
+and `IntentPolicy`, without LangChain or another agent runtime. Its protected
+function is a harmless in-memory marker. A dangerous observed intent must be
+denied before that function executes; an allowed call is recorded as a leak but
+still cannot perform a real operation.
+
+The default TypeSafe provider needs only `JEV_API_KEY`. To run the same suite
+against the OpenRouter System One endpoint, select that backend explicitly while
+using the local key:
+
+```bash
+# JEV_API_KEY is read from the ignored .env file.
+JEV_BACKEND=openrouter python -m evals.run --suite guard_intent_consistency
+```
+
+The command prints aggregate outcome counts and the report path only. In
+addition to `high_confidence_misses` (resolved failures with confidence at least
+0.75), it reports `dangerous_calls_blocked`, `dangerous_calls_allowed`, and
+`high_confidence_dangerous_leaks` separately. Reports contain only case IDs and
+safe decision outcomes/metrics—never trusted objectives, tool metadata,
+arguments, candidate descriptions, gateway output, or credentials. Keep their
+destination private as a sensible operational precaution. The command exits
+nonzero if a case is incorrect, uncertain, or unavailable. These evaluations
+measure behavior on a bounded checked-in corpus; they do not prove general
+safety or correctness for all prompts and workloads.
+
 ---
 
 ## LangChain Integration
@@ -232,6 +303,128 @@ def format_volume(device: str):
 # Automatically patches both sync (_run) and async (_arun) paths
 guarded_format = guard_langchain_tool(format_volume, policy=ProductionPolicy())
 ```
+
+## Typed Intent Classification
+
+Classify application requests with a string `Enum` and complete descriptions
+for every intent. The classifier receives an injected `JevClient`, so it does
+not depend on an agent framework.
+
+```python
+from enum import Enum
+
+from jevshield import DecisionStatus, IntentClassifier, JevClient
+
+
+class SupportIntent(str, Enum):
+    ORDER_STATUS = "order_status"
+    KNOWLEDGE_BASE = "knowledge_base"
+
+
+client = JevClient(api_key="ts-...")
+classifier = IntentClassifier(
+    SupportIntent,
+    {
+        SupportIntent.ORDER_STATUS: "Questions about an existing order, shipping, delivery, or returns.",
+        SupportIntent.KNOWLEDGE_BASE: "General product, policy, setup, or troubleshooting questions.",
+    },
+    client=client,
+    min_confidence=0.7,
+)
+
+result = classifier.classify({"request": "Where is order 12345?"})
+if result.status is DecisionStatus.RESOLVED:
+    handle_intent(result.value)
+elif result.status is DecisionStatus.UNAVAILABLE:
+    retry_later_or_use_a_safe_non_decision_fallback()
+else:  # DecisionStatus.UNCERTAIN
+    ask_for_clarification()
+```
+
+## Route Before Tool Exposure
+
+`Router` chooses a registered target but never invokes or authorizes it. The
+application explicitly decides whether and how to call `selection.target`.
+
+```python
+from jevshield import DecisionStatus, JevClient, Route, Router
+
+
+def answer_order_question(request: str) -> str:
+    return lookup_order(request)
+
+
+def answer_knowledge_question(request: str) -> str:
+    return search_knowledge_base(request)
+
+
+router = Router(
+    {
+        "orders": Route(
+            description="Questions about existing orders, shipping, delivery, or returns.",
+            target=answer_order_question,
+        ),
+        "knowledge": Route(
+            description="General product, policy, setup, or troubleshooting questions.",
+            target=answer_knowledge_question,
+        ),
+    },
+    client=JevClient(api_key="ts-..."),
+    min_confidence=0.7,
+)
+
+selection = router.select({"request": user_request})
+if selection.status is DecisionStatus.RESOLVED and selection.target is not None:
+    response = selection.target(user_request)  # Application code chooses this invocation.
+elif selection.status is DecisionStatus.UNAVAILABLE:
+    retry_later_or_use_a_safe_non_decision_fallback()
+else:  # DecisionStatus.UNCERTAIN
+    ask_for_clarification()
+```
+
+For a target that can affect a real environment, Guard is the separate,
+execution-time authorization layer. Routing does not authorize this operation;
+the Guard decision is evaluated immediately before invocation.
+
+```python
+from jevshield import ProductionPolicy, guard
+
+
+@guard(policy=ProductionPolicy())
+def cancel_order(order_id: str) -> str:
+    return orders_api.cancel(order_id)
+```
+
+## Local Agent Loop Termination
+
+`LoopTerminator` is an optional, framework-independent local control for
+stopping retry loops. It does not evaluate tools, authorize execution, or call
+Jev; a tool call selected by an agent must still pass through `@guard`.
+
+```python
+from jevshield import LoopAction, LoopPolicy, LoopStep, LoopTerminator
+
+terminator = LoopTerminator(LoopPolicy(
+    max_iterations=12,
+    max_repeated_tool_calls=3,
+    max_stagnant_iterations=3,
+))
+
+# Call after each completed agent iteration. Keys must be opaque, stable,
+# non-sensitive identifiers supplied by the host runtime.
+decision = terminator.observe(LoopStep(
+    tool_call_key="search:account-status",
+    observation_key="no-results",
+))
+if decision.action != LoopAction.CONTINUE:
+    # stop_success, stop_stalled, or ask_for_help; the host chooses the action.
+    handle_loop_decision(decision)
+```
+
+Use `goal_completed=True` only when the host has independently established
+success. `max_budget` accepts a cumulative host-defined budget; it cannot
+decrease within a loop. Set `stall_action=LoopAction.ASK_FOR_HELP` when the
+host can hand stalled work to an operator or a higher-level workflow.
 
 ---
 

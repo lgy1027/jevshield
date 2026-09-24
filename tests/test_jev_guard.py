@@ -1,6 +1,7 @@
 """jevshield 核心逻辑测试（stdlib unittest，零第三方依赖）。"""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 import json
 import os
 import sys
@@ -36,6 +37,10 @@ from jevshield import (
     ProductionPolicy,
     guard,
 )
+from jevshield.classify import IntentClassifier
+from jevshield.intent import IntentPolicy
+from jevshield.models import GuardContextMetadata
+from jevshield.runtime import ChoiceAnswer, DecisionStatus
 from jevshield.redaction import (
     build_evaluation_state,
     redact_for_audit,
@@ -700,6 +705,298 @@ class TestLocalRuleShortCircuit(unittest.TestCase):
             with self.assertRaises(SecurityViolationError):
                 list_files("/var/log")
         client.evaluate_context.assert_not_called()
+
+
+class TestGuardIntentConsistency(unittest.TestCase):
+    def intent_policy(self, expected, observed, **kwargs):
+        class IntentChoice(str, Enum):
+            READ = "read"
+            DELETE = "delete"
+
+        class DecisionClient:
+            def __init__(self):
+                self.states = []
+
+            def choose(self, state, question):
+                del question
+                self.states.append(state)
+                choice = (expected, observed)[len(self.states) - 1]
+                return ChoiceAnswer(choice, 0.95, DecisionStatus.RESOLVED, 1.0, "stub", "")
+
+            async def achoose(self, state, question):
+                return self.choose(state, question)
+
+        decision_client = DecisionClient()
+        classifier = IntentClassifier(
+            IntentChoice,
+            {IntentChoice.READ: "Read data.", IntentChoice.DELETE: "Delete data."},
+            decision_client,
+        )
+        return IntentPolicy(classifier, **kwargs), decision_client
+
+    def test_no_provider_preserves_existing_evaluator_path(self):
+        intent_policy, decision_client = self.intent_policy("read", "delete")
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+
+        @guard(policy=ProductionPolicy(), client=client, intent_policy=intent_policy)
+        def read_order(order_id):
+            return order_id
+
+        self.assertEqual(read_order("42"), "42")
+        self.assertEqual(decision_client.states, [])
+        self.assertEqual(client.evaluate_context.call_count, 1)
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertIsNone(evaluated.intent)
+        self.assertEqual(evaluated.args, {"args": ("42",), "kwargs": {}})
+
+    def test_matching_intent_reaches_existing_evaluator_with_real_invocation(self):
+        intent_policy, decision_client = self.intent_policy("read", "read")
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        provider_calls = []
+
+        def provide(args, kwargs):
+            provider_calls.append((args, kwargs))
+            return GuardContextMetadata(
+                intent="Read order 42", environment="production",
+                actor_id="user-42", resource_scope=("order:42",),
+            )
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=provide, intent_policy=intent_policy)
+        def read_order(order_id, *, api_key):
+            """Read one order."""
+            return order_id
+
+        self.assertEqual(read_order("42", api_key="sk-secret-value"), "42")
+        self.assertEqual(provider_calls, [(("42",), {"api_key": "sk-secret-value"})])
+        self.assertEqual(len(decision_client.states), 2)
+        self.assertNotIn("Read order 42", decision_client.states[1])
+        self.assertIn('"tool_name":"read_order"', decision_client.states[1])
+        self.assertNotIn("sk-secret-value", decision_client.states[1])
+        self.assertEqual(client.evaluate_context.call_count, 1)
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.tool_name, "read_order")
+        self.assertEqual(evaluated.tool_description, "Read one order.")
+        self.assertEqual(evaluated.args, {
+            "args": ("42",), "kwargs": {"api_key": "sk-secret-value"},
+        })
+        self.assertEqual(evaluated.intent, "Read order 42")
+        self.assertEqual(evaluated.environment, "production")
+        self.assertEqual(evaluated.actor_id, "user-42")
+        self.assertEqual(evaluated.resource_scope, ("order:42",))
+
+    def test_mismatch_denies_before_evaluator_or_wrapped_function(self):
+        intent_policy, _ = self.intent_policy("read", "delete")
+        client = mock.Mock()
+        client.evaluate_context.side_effect = AssertionError("evaluator called")
+        executions = []
+        events = []
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy, audit_sink=CallbackAuditSink(events.append))
+        def process_order(order_id, api_key):
+            executions.append(order_id)
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            process_order("42", "sk-abcdefghijklmnopqrstuvwxyz123456")
+
+        self.assertEqual(executions, [])
+        client.evaluate_context.assert_not_called()
+        self.assertEqual(raised.exception.decision.action, Action.DENY)
+        self.assertEqual(raised.exception.decision.evaluation.source, "intent_mismatch")
+        self.assertFalse(raised.exception.decision.network_called)
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", repr(raised.exception.decision))
+        self.assertEqual([(event.outcome, event.evaluation.source) for event in events],
+                         [("deny", "intent_mismatch")])
+
+    def test_provider_cannot_replace_invocation_identity(self):
+        intent_policy, _ = self.intent_policy("read", "read")
+        client = mock.Mock()
+        executions = []
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=lambda args, kwargs: GuardContext(
+                   "read_order", "Read one order", {"args": (), "kwargs": {}},
+                   intent="Read order 42"),
+               intent_policy=intent_policy)
+        def process_order(order_id):
+            executions.append(order_id)
+
+        with self.assertRaises(TypeError):
+            process_order("42")
+        self.assertEqual(executions, [])
+        client.evaluate_context.assert_not_called()
+
+    def test_provider_cannot_mutate_keyword_invocation_after_fast_deny(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+
+        def provide(args, kwargs):
+            kwargs["command"] = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, command):
+            return command
+
+        self.assertEqual(run(command="list files"), "list files")
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.args["kwargs"], {"command": "list files"})
+
+    def test_provider_cannot_mutate_nested_invocation_after_fast_deny(self):
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        payload = {"command": "list files", "items": ["report"]}
+
+        def provide(args, kwargs):
+            kwargs["payload"]["command"] = "rm -rf /etc"
+            kwargs["payload"]["items"].append("danger")
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, payload):
+            return payload
+
+        self.assertEqual(run(payload=payload), {"command": "list files", "items": ["report"]})
+        self.assertEqual(payload, {"command": "list files", "items": ["report"]})
+        evaluated = client.evaluate_context.call_args.args[0]
+        self.assertEqual(evaluated.args["kwargs"]["payload"], payload)
+
+    def test_provider_rejects_nested_object_with_aliasing_deepcopy_hook(self):
+        class AliasingDict(dict):
+            def __deepcopy__(self, memo):
+                return self
+
+        payload = {"command": AliasingDict({"value": "list files"})}
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        provider_calls = []
+        executions = []
+
+        def provide(args, kwargs):
+            provider_calls.append(True)
+            kwargs["payload"]["command"]["value"] = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, payload):
+            executions.append(payload)
+
+        with self.assertRaises(TypeError):
+            run(payload=payload)
+
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(executions, [])
+        self.assertEqual(payload["command"]["value"], "list files")
+        client.evaluate_context.assert_not_called()
+
+    def test_provider_rejects_type_spoofed_by_metaclass_equality(self):
+        class SpoofingType(type):
+            __hash__ = type.__hash__
+
+            def __eq__(cls, other):
+                return other is str
+
+        class MutableCommand(metaclass=SpoofingType):
+            def __init__(self):
+                self.value = "list files"
+
+        command = MutableCommand()
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        provider_calls = []
+        executions = []
+
+        def provide(args, kwargs):
+            provider_calls.append(True)
+            kwargs["command"].value = "rm -rf /etc"
+            return GuardContextMetadata(environment="production")
+
+        @guard(policy=ProductionPolicy(), client=client, context_provider=provide)
+        def run(*, command):
+            executions.append(command.value)
+
+        with self.assertRaises(TypeError):
+            run(command=command)
+
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(executions, [])
+        self.assertEqual(command.value, "list files")
+        client.evaluate_context.assert_not_called()
+
+    def test_local_fast_deny_runs_before_context_provider_and_intent(self):
+        intent_policy, decision_client = self.intent_policy("read", "read")
+        client = mock.Mock()
+        provider_calls = []
+
+        def provide(args, kwargs):
+            provider_calls.append((args, kwargs))
+            return GuardContextMetadata(intent="Read files")
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=provide, intent_policy=intent_policy)
+        def run(command):
+            return "executed"
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            run("rm -rf /etc")
+
+        self.assertEqual(raised.exception.decision.evaluation.source, "local_rule")
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(decision_client.states, [])
+        client.evaluate_context.assert_not_called()
+
+    def test_matching_intent_does_not_override_existing_evaluator_deny(self):
+        intent_policy, _ = self.intent_policy("read", "read")
+        client = mock.Mock()
+        client.evaluate_context.return_value = Evaluation(
+            risk_level="critical_danger", irreversibility=0.99,
+            blast_radius=4.0, confidence=1.0, source="jev",
+        )
+        executions = []
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy)
+        def read_order(order_id):
+            executions.append(order_id)
+
+        with self.assertRaises(SecurityViolationError) as raised:
+            read_order("42")
+
+        self.assertEqual(executions, [])
+        self.assertEqual(raised.exception.decision.evaluation.source, "jev")
+        client.evaluate_context.assert_called_once()
+
+    def test_intent_ask_uses_confirmer_then_existing_evaluator(self):
+        intent_policy, _ = self.intent_policy("read", "delete", on_mismatch=Action.ASK)
+        client = mock.Mock()
+        client.evaluate_context.return_value = safe_evaluation()
+        events = []
+        confirmations = []
+
+        class Approver:
+            def confirm(self, decision, timeout):
+                confirmations.append((decision, timeout))
+                return True
+
+        @guard(policy=ProductionPolicy(), client=client,
+               context_provider=lambda args, kwargs: GuardContextMetadata(intent="Read order 42"),
+               intent_policy=intent_policy, confirmer=Approver(),
+               audit_sink=CallbackAuditSink(events.append))
+        def process_order(order_id):
+            return order_id
+
+        self.assertEqual(process_order("42"), "42")
+        self.assertEqual(len(confirmations), 1)
+        self.assertEqual(confirmations[0][0].action, Action.ASK)
+        self.assertEqual(confirmations[0][0].evaluation.source, "intent_mismatch")
+        self.assertEqual(confirmations[0][1], ProductionPolicy().ask_timeout)
+        self.assertEqual([event.outcome for event in events], ["ask-approval", "allow"])
+        client.evaluate_context.assert_called_once()
 
 
 class TestHeuristicFallback(unittest.TestCase):

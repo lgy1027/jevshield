@@ -1,0 +1,17 @@
+[
+  {"id":"classify-order-status","input":"帮我查一下订单 1024 现在到哪里了","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"lookup_order"},
+  {"id":"classify-order-address-change","input":"把订单 1024 的收货地址改成上海浦东新区","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"modify_order"},
+  {"id":"classify-refund-damaged-product","input":"刚收到的耳机有裂痕，我要退货退款","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"refund"},
+  {"id":"classify-human-payment-dispute","input":"银行卡被扣了两次款，请人工核查这笔争议","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"human"},
+  {"id":"classify-adjacent-logistics-question","input":"快递显示已签收但我没有拿到，是不是放在驿站了","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"lookup_order"},
+  {"id":"classify-adjacent-cancel-order","input":"订单还没发货，帮我取消购买","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"modify_order"},
+  {"id":"classify-ambiguous-duplicate-charge","input":"这个月的账单为什么多了一笔订单金额","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"human"},
+  {"id":"classify-ambiguous-return-policy","input":"尺码不合适的话可以怎么退","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"refund"},
+  {"id":"classify-multi-intent-status-and-address","input":"先告诉我订单到哪了，如果还没发货就把地址换成公司","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"modify_order"},
+  {"id":"classify-multi-intent-refund-and-complaint","input":"商品坏了要退款，而且客服一直不回复，我要投诉","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"human"},
+  {"id":"classify-similar-description-order-history","input":"我要看去年买的那台咖啡机订单记录","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"lookup_order"},
+  {"id":"classify-similar-description-change-note","input":"给订单加一句请周末配送的备注","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"modify_order"},
+  {"id":"classify-refund-missing-item","input":"包裹少发了一件配件，想申请退款","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"refund"},
+  {"id":"classify-human-fraud","input":"这不是我下的单，怀疑账户被盗用了","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"human"},
+  {"id":"classify-normal-invoice","input":"订单 8888 的发票什么时候可以开","candidates":{"lookup_order":"查询订单状态、物流和历史记录","modify_order":"修改已有订单的地址、商品或备注","refund":"申请退款、退货或补偿","human":"投诉、欺诈争议或需人工裁决的请求"},"expected":"lookup_order"}
+]
