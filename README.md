@@ -39,6 +39,22 @@ For LangChain tool integrations:
 pip install "jevshield[langchain]"
 ```
 
+### Choose an example
+
+The example files live in the source checkout. Clone it and install the
+checkout before running them:
+
+```bash
+git clone https://github.com/lgy1027/jevshield.git
+cd jevshield
+python -m pip install -e .
+```
+
+Then start with the fully runnable, credential-free
+[minimal Agent example](examples/00_minimal_agent.py). The
+[examples guide](examples/README.md) separates first-run examples from real
+Jev demonstrations and development-only evaluations.
+
 ### 2. Minimal Agent Integration (Recommended)
 
 JevShield is a pre-check layer, not an Agent runtime. Your application owns

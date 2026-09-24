@@ -52,6 +52,23 @@ def resolved(action, reason="reviewed"):
 
 
 class TestLiveExampleEntrypoints(unittest.TestCase):
+    def test_minimal_agent_example_routes_to_application_owned_roles(self):
+        """Removing the host-owned dispatch step must fail this runnable example."""
+        example = load_example("00_minimal_agent.py")
+
+        self.assertEqual(
+            example.dispatch_request(
+                "Find the shipping policy.", example.DemoRouterClient("research")
+            ),
+            "research: approved shipping-policy facts",
+        )
+        self.assertEqual(
+            example.dispatch_request(
+                "Write the approved answer.", example.DemoRouterClient("coding")
+            ),
+            "simulated save: answer.md",
+        )
+
     def test_async_and_sql_example_stays_offline_and_fast_denies(self):
         """Changing the example client to ambient lookup must fail this test."""
         with patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):
@@ -98,6 +115,17 @@ class TestLiveExampleEntrypoints(unittest.TestCase):
             guarded_delete.invoke({"bucket_name": "prod-backups", "force": True})
         self.assertEqual(error.exception.rule_result.outcome, RuleOutcome.DENY)
         self.assertFalse(error.exception.decision.network_called)
+
+    def test_langchain_example_builds_fresh_tools_without_stacking_guards(self):
+        """Reusing a module-level Tool must not add another Guard wrapper."""
+        example = load_example("02_langchain_integration.py")
+
+        first_delete, first_list = example.build_guarded_tools()
+        second_delete, second_list = example.build_guarded_tools()
+
+        self.assertIsNot(first_delete, second_delete)
+        self.assertIsNot(first_list, second_list)
+        self.assertIn("app.py", second_list.invoke({"path": "/workspace"}))
 
     def test_custom_client_example_keeps_the_demo_offline_and_guarded(self):
         with patch.dict(os.environ, {"JEV_API_KEY": "live-key"}):

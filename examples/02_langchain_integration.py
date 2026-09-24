@@ -9,12 +9,10 @@ from jevshield import (
 # Keep this runnable demo local even if the shell exports a real JEV_API_KEY.
 demo_client = JevClient(api_key="")
 
-@tool
 def delete_s3_bucket(bucket_name: str, force: bool = False):
     """Permanently deletes an Amazon S3 storage bucket and all its contents."""
     return f"Bucket {bucket_name} dropped."
 
-@tool
 def list_files(path: str):
     """Lists files within a specified local filesystem directory."""
     return f"Files at {path}: ['app.py', 'README.md']"
@@ -24,8 +22,10 @@ def build_guarded_tools():
 
     policy = DevelopmentPolicy()
     return (
-        guard_langchain_tool(delete_s3_bucket, policy=policy, client=demo_client),
-        guard_langchain_tool(list_files, policy=policy, client=demo_client),
+        guard_langchain_tool(
+            tool(delete_s3_bucket), policy=policy, client=demo_client
+        ),
+        guard_langchain_tool(tool(list_files), policy=policy, client=demo_client),
     )
 
 
