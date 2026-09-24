@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+import warnings
 
 
 class HandoffAction(str, Enum):
@@ -35,7 +36,7 @@ class HandoffDecision:
 
 
 class HandoffTracker:
-    """Track one delegation run and stop handoff budgets and cycles locally."""
+    """Track active delegation and stop only true delegation loops locally."""
 
     def __init__(self, policy: Optional[HandoffPolicy] = None) -> None:
         self.policy = policy or HandoffPolicy()
@@ -47,32 +48,63 @@ class HandoffTracker:
         self._handoff_count = 0
         self._last_handoff: Optional[tuple[str, str]] = None
         self._repeated_handoffs = 0
-        self._visited_roles: set[str] = set()
+        self._active_roles: list[str] = []
         self._terminal: Optional[HandoffDecision] = None
 
-    def observe(self, source_role: str, target_role: str) -> HandoffDecision:
-        """Record a requested handoff using opaque role identifiers."""
+    def delegate(self, parent_role: str, child_role: str) -> HandoffDecision:
+        """Delegate from the active role to a child and push that child on the stack."""
 
         if self._terminal is not None:
             return self._terminal
-        self._validate_role(source_role)
-        self._validate_role(target_role)
-        if source_role == target_role:
-            raise ValueError("source_role and target_role must differ.")
+        self._validate_role(parent_role)
+        self._validate_role(child_role)
+        if parent_role == child_role:
+            raise ValueError("parent_role and child_role must differ.")
+        if self._active_roles:
+            if parent_role != self._active_roles[-1]:
+                raise ValueError("parent_role must be the active role.")
+        else:
+            self._active_roles.append(parent_role)
 
-        handoff = (source_role, target_role)
+        handoff = (parent_role, child_role)
         self._handoff_count += 1
         self._record_repetition(handoff)
 
         if self._handoff_count >= self.policy.max_handoffs:
             return self._escalate("max_handoffs")
         if self._repeated_handoffs >= self.policy.max_repeated_handoffs:
-            return self._escalate("repeated_handoff")
-        if target_role in self._visited_roles:
-            return self._escalate("handoff_cycle")
+            return self._escalate("repeated_delegation")
+        if child_role in self._active_roles:
+            return self._escalate("active_delegation_cycle")
 
-        self._visited_roles.add(source_role)
-        self._visited_roles.add(target_role)
+        self._active_roles.append(child_role)
+        return HandoffDecision(HandoffAction.CONTINUE, "", self._handoff_count)
+
+    def observe(self, source_role: str, target_role: str) -> HandoffDecision:
+        """Deprecated compatibility alias for one-way delegation."""
+
+        warnings.warn(
+            "observe() is deprecated; use delegate() or return_to_parent().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.delegate(source_role, target_role)
+
+    def return_to_parent(self, child_role: str, parent_role: str) -> HandoffDecision:
+        """Return from the active child to its parent without consuming budget."""
+
+        if self._terminal is not None:
+            return self._terminal
+        self._validate_role(child_role)
+        self._validate_role(parent_role)
+        if (
+            len(self._active_roles) < 2
+            or self._active_roles[-1] != child_role
+            or self._active_roles[-2] != parent_role
+        ):
+            raise ValueError("Return must match the active child and its parent.")
+
+        self._active_roles.pop()
         return HandoffDecision(HandoffAction.CONTINUE, "", self._handoff_count)
 
     @staticmethod

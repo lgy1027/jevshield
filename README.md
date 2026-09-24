@@ -399,25 +399,30 @@ def cancel_order(order_id: str) -> str:
 
 `HandoffTracker` is an optional local limit around application-owned Agent
 delegation. It does not route, invoke an Agent, call Jev, or authorize a tool.
-It returns `human_escalation` when delegation reaches its budget, repeats the
-same transfer, or returns to a role already visited in the current top-level
-task.
+Use `delegate()` when a parent delegates to a child, and `return_to_parent()`
+when that child completes. Returns do not consume the delegation budget.
+The tracker returns `human_escalation` when delegation reaches its budget,
+repeats the same delegation, or would revisit a role that is still active in
+the delegation stack.
 
 ```python
 from jevshield import HandoffAction, HandoffPolicy, HandoffTracker
 
 handoffs = HandoffTracker(HandoffPolicy(max_handoffs=4))
 
-decision = handoffs.observe("research", "coding")
+decision = handoffs.delegate("main", "research")
 if decision.action is HandoffAction.HUMAN_ESCALATION:
     return request_human_help(decision.reason)
 
-run_coding_agent()
+research_result = run_research_agent()
+handoffs.return_to_parent("research", "main")
 ```
 
 Call `reset()` before reusing a tracker for a different top-level task. Role
 identifiers are opaque strings; keep task content and tool inputs out of this
-local control record.
+local control record. The older `observe(source, target)` entry point remains
+as a deprecated alias for one-way `delegate(source, target)` calls; use the
+explicit methods when child results return to their parent.
 
 ## Local Agent Loop Termination
 
